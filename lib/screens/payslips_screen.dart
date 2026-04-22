@@ -143,7 +143,8 @@ class _PayslipsScreenState extends State<PayslipsScreen> {
     final reimbursement = num.tryParse((slip['reimbursement'] ?? 0).toString()) ?? 0;
     final tds = num.tryParse((slip['tds'] ?? 0).toString()) ?? 0;
     final totalPerf = incentive + prBonus + reimbursement;
-    final takeHome = (grossPay - deductions - tds + totalPerf).round();
+    // Prefer server-calculated net_pay to avoid drift when company-specific payroll formulas change.
+    final takeHome = (num.tryParse((slip['net_pay'] ?? 0).toString()) ?? (grossPay - deductions - tds + totalPerf)).round();
 
     // Match web payslip styling (role-profile.tsx)
     final cellClass = "cell";
