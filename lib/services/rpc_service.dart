@@ -1,19 +1,15 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'attendance_policy.dart';
+import 'attendance_timezone.dart';
+import 'ensure_employee_mirror.dart';
 import 'supabase_client.dart';
 
 class RpcService {
   SupabaseClient get _sb => SupabaseApp.client;
-
-  static String _workDateIST() {
-    final ist = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-    final y = ist.year.toString().padLeft(4, '0');
-    final m = ist.month.toString().padLeft(2, '0');
-    final d = ist.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
-  }
 
   static int _clampMinutes(num? n) {
     final x = (n ?? 0).round();
@@ -39,15 +35,121 @@ class RpcService {
     final dLng = toRad(bLng - aLng);
     final sLat1 = toRad(aLat);
     final sLat2 = toRad(bLat);
-    final x = (Math.sin(dLat / 2) * Math.sin(dLat / 2)) +
-        (Math.cos(sLat1) * Math.cos(sLat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2));
-    final c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+    final x = (math.sin(dLat / 2) * math.sin(dLat / 2)) +
+        (math.cos(sLat1) * math.cos(sLat2) * math.sin(dLng / 2) * math.sin(dLng / 2));
+    final c = 2 * math.atan2(math.sqrt(x), math.sqrt(1 - x));
     return R * c;
   }
 
-  // Dart's math isn't imported by default; keep helpers local.
-  // ignore: non_constant_identifier_names
-  static _Math Math = _Math();
+  static List<Map<String, String>> _asSegments(dynamic raw) {
+    if (raw == null) return [];
+    if (raw is List) {
+      final out = <Map<String, String>>[];
+      for (final e in raw) {
+        if (e is Map) {
+          final o = '${e['out'] ?? ''}'.trim();
+          final i = '${e['in'] ?? ''}'.trim();
+          if (o.isNotEmpty && i.isNotEmpty) out.add({'out': o, 'in': i});
+        }
+      }
+      return out;
+    }
+    if (raw is String && raw.trim().isNotEmpty) {
+      try {
+        return _asSegments(jsonDecode(raw));
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  Future<({bool ok, String companyId, String employeeId, String? error})> _attendanceEmployeeGate(String userId) async {
+    final me = await _sb.from('HRMS_users').select('company_id, employment_status').eq('id', userId).maybeSingle();
+    final companyId = (me?['company_id'] ?? '').toString();
+    if (companyId.isEmpty) {
+      return (ok: false, companyId: '', employeeId: '', error: 'User not linked to company');
+    }
+    if ((me?['employment_status'] ?? '').toString() != 'current') {
+      return (
+        ok: false,
+        companyId: '',
+        employeeId: '',
+        error: 'Attendance is available only for active (current) employees linked to your company. Ask HR if your status should be current.',
+      );
+    }
+
+    final mirror = await ensureEmployeeMirrorForUser(_sb, companyId: companyId, userId: userId);
+    if (!mirror.ok || mirror.employeeId == null || mirror.employeeId!.isEmpty) {
+      return (ok: false, companyId: '', employeeId: '', error: mirror.error ?? 'No employee profile');
+    }
+
+    final emp = await _sb
+        .from('HRMS_employees')
+        .select('id, is_active')
+        .eq('company_id', companyId)
+        .eq('id', mirror.employeeId!)
+        .maybeSingle();
+    if (emp?['id'] == null) {
+      return (ok: false, companyId: '', employeeId: '', error: 'Employee record not found');
+    }
+    if (emp?['is_active'] == false) {
+      return (ok: false, companyId: '', employeeId: '', error: 'Employee record not active. Ask HR to activate your employee profile.');
+    }
+
+    return (ok: true, companyId: companyId, employeeId: mirror.employeeId!, error: null);
+  }
+
+  Future<String> _computeAttendanceWorkDate(String companyId, String attendanceEmployeeId) async {
+    ensureAttendanceTimeZonesInitialized();
+    final ctx = await getAttendanceContextForUser(sb: _sb, companyId: companyId, attendanceEmployeeId: attendanceEmployeeId);
+    return computeWorkDateForNow(
+      nowUtc: DateTime.now().toUtc(),
+      attendanceTz: ctx.timeZone,
+      isNightShift: ctx.isNightShift,
+      shiftStartTime: ctx.shiftStartTime,
+      shiftEndTime: ctx.shiftEndTime,
+    );
+  }
+
+  Future<void> _bestEffortUpsertAttendanceState({
+    required String companyId,
+    required String employeeId,
+    required String? attendanceLogId,
+    required String workDate,
+    required String status,
+  }) async {
+    try {
+      final row = <String, dynamic>{
+        'company_id': companyId,
+        'employee_id': employeeId,
+        'work_date': workDate,
+        'status': status,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      if (attendanceLogId != null && attendanceLogId.isNotEmpty) {
+        row['attendance_log_id'] = attendanceLogId;
+      }
+      await _sb.from('HRMS_attendance_state').upsert(row, onConflict: 'company_id,employee_id');
+    } catch (_) {}
+  }
+
+  Future<void> _bestEffortCloseActivitySessions({
+    required String companyId,
+    required String employeeId,
+    required String attendanceLogId,
+    required String endedAtIso,
+  }) async {
+    try {
+      await _sb
+          .from('HRMS_activity_sessions')
+          .update({'ended_at': endedAtIso, 'last_heartbeat_at': endedAtIso})
+          .eq('company_id', companyId)
+          .eq('employee_id', employeeId)
+          .eq('attendance_log_id', attendanceLogId)
+          .isFilter('ended_at', null);
+    } catch (_) {}
+  }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
     final res = await _sb.rpc('hrms_login', params: {
@@ -167,12 +269,13 @@ class RpcService {
     int? year,
     int? month,
   }) async {
-    final res = await _sb.rpc('hrms_payslips_me', params: {
+    final params = <String, dynamic>{
       'p_user_id': userId,
-      'p_company_id': companyId,
-      'p_year': year,
-      'p_month': month,
-    });
+      if (companyId != null && companyId.isNotEmpty) 'p_company_id': companyId,
+      if (year != null) 'p_year': year,
+      if (month != null) 'p_month': month,
+    };
+    final res = await _sb.rpc('hrms_payslips_me', params: params);
     return Map<String, dynamic>.from(res as Map);
   }
 
@@ -214,6 +317,7 @@ class RpcService {
   Future<String> leaveRequestCreate({
     required String companyId,
     required String userId,
+    required String actorUserId,
     required String leaveTypeId,
     required String startDateYmd,
     required String endDateYmd,
@@ -223,6 +327,7 @@ class RpcService {
     final res = await _sb.rpc('hrms_leave_request_create', params: {
       'p_company_id': companyId,
       'p_user_id': userId,
+      'p_actor_user_id': actorUserId,
       'p_leave_type_id': leaveTypeId,
       'p_start_date': startDateYmd,
       'p_end_date': endDateYmd,
@@ -278,15 +383,17 @@ class RpcService {
   Future<String> reimbursementCreate({
     required String companyId,
     required String userId,
+    required String actorUserId,
     required String category,
     required num amount,
     required String claimDateYmd,
-    String? description,
-    String? attachmentUrl,
+    required String description,
+    required String attachmentUrl,
   }) async {
     final res = await _sb.rpc('hrms_reimbursement_create', params: {
       'p_company_id': companyId,
       'p_user_id': userId,
+      'p_actor_user_id': actorUserId,
       'p_category': category,
       'p_amount': amount,
       'p_claim_date': claimDateYmd,
@@ -325,51 +432,37 @@ class RpcService {
     return {'has_employee': false};
   }
 
-  /// Web-parity: today's attendance + log (IST date) with the same DB sources as web.
-  /// Returns `{hasEmployee: bool, workDate: yyyy-mm-dd, log: Map?}`.
+  /// Web-parity: today's attendance + log (shift timezone / night-shift work_date).
+  /// Returns `{hasEmployee, has_employee, workDate, timeZone, log}`.
   Future<Map<String, dynamic>> attendanceTodayWebParity(String userId) async {
-    final me = await _sb.from('HRMS_users').select('company_id').eq('id', userId).maybeSingle();
-    final companyId = (me?['company_id'] ?? '').toString();
-    final wd = _workDateIST();
-    if (companyId.isEmpty) return {'hasEmployee': false, 'workDate': wd, 'log': null};
-
-    final emp = await _sb.from('HRMS_employees').select('id').eq('company_id', companyId).eq('user_id', userId).maybeSingle();
-    final empId = (emp?['id'] ?? '').toString();
-    if (empId.isEmpty) return {'hasEmployee': false, 'workDate': wd, 'log': null};
-
+    final gate = await _attendanceEmployeeGate(userId);
+    if (!gate.ok) {
+      return {'hasEmployee': false, 'has_employee': false, 'workDate': null, 'timeZone': null, 'log': null};
+    }
+    final wd = await _computeAttendanceWorkDate(gate.companyId, gate.employeeId);
     final log = await _sb
         .from('HRMS_attendance_logs')
         .select(
-          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, status, in_office, office_note, notes',
+          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, '
+          'lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, '
+          'lunch_break_segments, tea_break_segments, status, in_office, office_note, notes, check_in_in_office',
         )
-        .eq('company_id', companyId)
-        .eq('employee_id', empId)
+        .eq('company_id', gate.companyId)
+        .eq('employee_id', gate.employeeId)
         .eq('work_date', wd)
         .maybeSingle();
 
-    return {'hasEmployee': true, 'workDate': wd, 'log': log == null ? null : Map<String, dynamic>.from(log)};
+    final ctx = await getAttendanceContextForUser(sb: _sb, companyId: gate.companyId, attendanceEmployeeId: gate.employeeId);
+    return {
+      'hasEmployee': true,
+      'has_employee': true,
+      'workDate': wd,
+      'timeZone': ctx.timeZone,
+      'log': log == null ? null : Map<String, dynamic>.from(log),
+    };
   }
 
-  static const int _mandatoryLunchMinutesWhenNoLunchPunch = 60;
-  static const int _minGrossMinutesForMandatoryLunch = 4 * 60;
-
-  static int _effectiveLunchBreakMinutes({
-    required int recordedLunchMinutes,
-    required String? lunchCheckOutAt,
-    required String? lunchCheckInAt,
-    required int grossWorkMinutes,
-  }) {
-    var m = _clampMinutes(recordedLunchMinutes);
-    final noLunchPunch = (lunchCheckOutAt == null || lunchCheckOutAt.trim().isEmpty) && (lunchCheckInAt == null || lunchCheckInAt.trim().isEmpty);
-    if (noLunchPunch && grossWorkMinutes >= _minGrossMinutesForMandatoryLunch && m < _mandatoryLunchMinutesWhenNoLunchPunch) {
-      m = _mandatoryLunchMinutesWhenNoLunchPunch;
-    }
-    if (m > grossWorkMinutes) return grossWorkMinutes < 0 ? 0 : grossWorkMinutes;
-    return m;
-  }
-
-  /// Web-parity punch (location required) and geofence marking.
-  /// `action`: 'in' or 'out'. Returns updated attendance log row.
+  /// Web-parity punch (location required), geofence, work_date from shift TZ, mirror + gate.
   Future<Map<String, dynamic>> attendancePunchWebParity({
     required String userId,
     required String action,
@@ -378,9 +471,12 @@ class RpcService {
     int? accuracyM,
     bool allowRepunchOut = false,
   }) async {
-    final me = await _sb.from('HRMS_users').select('company_id').eq('id', userId).maybeSingle();
-    final companyId = (me?['company_id'] ?? '').toString();
-    if (companyId.isEmpty) throw PostgrestException(message: 'User not linked to company');
+    final gate = await _attendanceEmployeeGate(userId);
+    if (!gate.ok) {
+      throw PostgrestException(message: gate.error ?? 'Attendance not allowed');
+    }
+    final companyId = gate.companyId;
+    final empId = gate.employeeId;
 
     final company = await _sb.from('HRMS_companies').select('latitude, longitude, office_radius_m').eq('id', companyId).maybeSingle();
     final officeLat = (company?['latitude'] as num?)?.toDouble();
@@ -390,17 +486,14 @@ class RpcService {
       throw PostgrestException(message: 'Company office location is not configured. Ask Super Admin to set it in Settings → Company.');
     }
 
-    final emp = await _sb.from('HRMS_employees').select('id').eq('company_id', companyId).eq('user_id', userId).maybeSingle();
-    final empId = (emp?['id'] ?? '').toString();
-    if (empId.isEmpty) throw PostgrestException(message: 'No employee profile found. Ask HR to complete your employee record before marking attendance.');
-
-    final wd = _workDateIST();
+    final wd = await _computeAttendanceWorkDate(companyId, empId);
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
     final existing = await _sb
         .from('HRMS_attendance_logs')
         .select(
-          'id, check_in_at, check_out_at, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, notes, check_in_in_office, in_office, office_note',
+          'id, check_in_at, check_out_at, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, '
+          'lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, notes, check_in_in_office, in_office, office_note',
         )
         .eq('company_id', companyId)
         .eq('employee_id', empId)
@@ -435,6 +528,8 @@ class RpcService {
               'lunch_check_in_at': null,
               'tea_check_out_at': null,
               'tea_check_in_at': null,
+              'lunch_break_segments': <dynamic>[],
+              'tea_break_segments': <dynamic>[],
               'total_hours': null,
               'status': 'present',
               'check_in_lat': lat,
@@ -448,10 +543,19 @@ class RpcService {
             }
           ])
           .select(
-            'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, status, in_office, office_note, notes',
+            'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, '
+            'lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, lunch_break_segments, tea_break_segments, status, in_office, office_note, notes',
           )
           .single();
-      return Map<String, dynamic>.from(inserted as Map);
+      final row = Map<String, dynamic>.from(inserted as Map);
+      await _bestEffortUpsertAttendanceState(
+        companyId: companyId,
+        employeeId: empId,
+        attendanceLogId: row['id']?.toString(),
+        workDate: wd,
+        status: 'ACTIVE',
+      );
+      return row;
     }
 
     // out
@@ -459,7 +563,20 @@ class RpcService {
       throw PostgrestException(message: 'Punch in first before punching out.');
     }
     if (existing['check_out_at'] != null && !allowRepunchOut) {
-      throw PostgrestException(message: 'You have already punched out for today. Ask HR/Admin if you need corrections.');
+      await _bestEffortUpsertAttendanceState(
+        companyId: companyId,
+        employeeId: empId,
+        attendanceLogId: existing['id']?.toString(),
+        workDate: wd,
+        status: 'INACTIVE',
+      );
+      await _bestEffortCloseActivitySessions(
+        companyId: companyId,
+        employeeId: empId,
+        attendanceLogId: existing['id'].toString(),
+        endedAtIso: nowIso,
+      );
+      throw PostgrestException(message: 'You have already punched out for today. Tracking has been stopped.');
     }
     if (existing['lunch_break_started_at'] != null) {
       throw PostgrestException(message: 'End lunch (check in after lunch) before final check out.');
@@ -478,71 +595,99 @@ class RpcService {
     final finalTeaMin = _addAccumulatedMinutes(accumMin: teaMinBase, startedAtIso: existing['tea_break_started_at']?.toString(), nowIso: nowIso);
 
     final grossMinutes = ((outMs - inMs) / 60000).round();
-    final totalHours = (grossMinutes / 60);
-    final totalHours2dp = (totalHours * 100).round() / 100.0;
+    final totalHours2dp = ((grossMinutes / 60) * 100).round() / 100.0;
 
-    final lunchMinutesStored = _effectiveLunchBreakMinutes(
-      recordedLunchMinutes: finalLunchMin,
-      lunchCheckOutAt: existing['lunch_check_out_at']?.toString(),
-      lunchCheckInAt: existing['lunch_check_in_at']?.toString(),
+    const lunchBreakMinutesBody = 0;
+    const teaBreakMinutesBody = 0;
+    final actualLunchMinutes = math.max(finalLunchMin, lunchBreakMinutesBody);
+    final actualTeaMinutes = math.max(finalTeaMin, teaBreakMinutesBody);
+    final effectiveBreak = effectiveCombinedBreakBreakdown(
+      lunchMinutes: actualLunchMinutes,
+      teaMinutes: actualTeaMinutes,
       grossWorkMinutes: grossMinutes,
     );
+
+    final teaStartedPre = existing['tea_break_started_at']?.toString().trim();
+    final teaCheckInAt = (teaStartedPre != null && teaStartedPre.isNotEmpty) ? nowIso : existing['tea_check_in_at'];
+
+    final checkInSide = existing['check_in_in_office'] == true || existing['in_office'] == true;
+    final inOfficeStored = checkInSide && inOffice;
 
     final updated = await _sb
         .from('HRMS_attendance_logs')
         .update({
           'check_out_at': nowIso,
-          'lunch_break_minutes': lunchMinutesStored,
-          'tea_break_minutes': finalTeaMin,
+          'lunch_break_minutes': effectiveBreak.lunchBreakMinutes,
+          'tea_break_minutes': effectiveBreak.teaBreakMinutes,
           'lunch_break_started_at': null,
           'tea_break_started_at': null,
+          'tea_check_in_at': teaCheckInAt,
           'total_hours': totalHours2dp,
           'status': 'present',
           'check_out_lat': lat,
           'check_out_lng': lng,
           'check_out_accuracy_m': accuracyM,
           'check_out_in_office': inOffice,
-          'in_office': (existing['check_in_in_office'] == true || existing['in_office'] == true) && inOffice,
-          'office_note': inOffice ? existing['office_note'] : '${(existing['office_note'] ?? '').toString()} Punched out from outside office.'.trim(),
+          'in_office': inOfficeStored,
+          'office_note': inOffice
+              ? existing['office_note']
+              : '${(existing['office_note'] ?? '').toString()} Punched out from outside office.'.trim(),
           'notes': '${(existing['notes'] ?? '').toString()} Punch out: ${inOffice ? "Inside office." : "Outside office."}'.trim(),
           'updated_at': nowIso,
         })
         .eq('id', existing['id'])
         .select(
-          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, status, in_office, office_note, notes',
+          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, '
+          'lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, lunch_break_segments, tea_break_segments, status, in_office, office_note, notes',
         )
         .single();
 
-    return Map<String, dynamic>.from(updated as Map);
+    final outRow = Map<String, dynamic>.from(updated as Map);
+    await _bestEffortUpsertAttendanceState(
+      companyId: companyId,
+      employeeId: empId,
+      attendanceLogId: outRow['id']?.toString(),
+      workDate: wd,
+      status: 'INACTIVE',
+    );
+    await _bestEffortCloseActivitySessions(
+      companyId: companyId,
+      employeeId: empId,
+      attendanceLogId: existing['id'].toString(),
+      endedAtIso: nowIso,
+    );
+    return outRow;
   }
 
-  /// Web-parity break toggle (lunch/tea). Returns updated log row.
+  /// Web-parity break toggle (lunch/tea) including `*_break_segments` + attendance_state.
   Future<Map<String, dynamic>> attendanceBreakToggleWebParity({
     required String userId,
     required String kind, // lunch|tea
   }) async {
-    final me = await _sb.from('HRMS_users').select('company_id').eq('id', userId).maybeSingle();
-    final companyId = (me?['company_id'] ?? '').toString();
-    if (companyId.isEmpty) throw PostgrestException(message: 'User not linked to company');
+    final gate = await _attendanceEmployeeGate(userId);
+    if (!gate.ok) {
+      throw PostgrestException(message: gate.error ?? 'Attendance not allowed');
+    }
+    final companyId = gate.companyId;
+    final empId = gate.employeeId;
 
-    final emp = await _sb.from('HRMS_employees').select('id').eq('company_id', companyId).eq('user_id', userId).maybeSingle();
-    final empId = (emp?['id'] ?? '').toString();
-    if (empId.isEmpty) throw PostgrestException(message: 'No employee profile found.');
-
-    final wd = _workDateIST();
+    final wd = await _computeAttendanceWorkDate(companyId, empId);
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
     final existing = await _sb
         .from('HRMS_attendance_logs')
         .select(
-          'id, check_in_at, check_out_at, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at',
+          'id, check_in_at, check_out_at, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, '
+          'lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, lunch_break_segments, tea_break_segments',
         )
         .eq('company_id', companyId)
         .eq('employee_id', empId)
         .eq('work_date', wd)
         .maybeSingle();
 
-    if (existing == null || existing['check_in_at'] == null) throw PostgrestException(message: 'Punch in first before starting breaks.');
+    if (existing == null || existing['check_in_at'] == null) {
+      throw PostgrestException(message: 'Punch in first before starting breaks.');
+    }
     if (existing['check_out_at'] != null) throw PostgrestException(message: 'Attendance already completed for today.');
 
     final isLunch = kind == 'lunch';
@@ -550,6 +695,9 @@ class RpcService {
     final teaStarted = existing['tea_break_started_at']?.toString();
     final lunchMinBase = _clampMinutes(existing['lunch_break_minutes'] as num?);
     final teaMinBase = _clampMinutes(existing['tea_break_minutes'] as num?);
+
+    var lunchSeg = List<Map<String, String>>.from(_asSegments(existing['lunch_break_segments']));
+    var teaSeg = List<Map<String, String>>.from(_asSegments(existing['tea_break_segments']));
 
     final isRunning = isLunch ? (lunchStarted != null && lunchStarted.trim().isNotEmpty) : (teaStarted != null && teaStarted.trim().isNotEmpty);
 
@@ -564,29 +712,38 @@ class RpcService {
     String? nextTeaInAt = existing['tea_check_in_at']?.toString();
 
     if (isRunning) {
-      // stop this break
       if (isLunch) {
         nextLunchMin = _addAccumulatedMinutes(accumMin: lunchMinBase, startedAtIso: lunchStarted, nowIso: nowIso);
         nextLunchStarted = null;
         nextLunchInAt = nowIso;
+        final ls = lunchStarted?.trim();
+        if (ls != null && ls.isNotEmpty) {
+          lunchSeg = [...lunchSeg, {'out': ls, 'in': nowIso}];
+        }
       } else {
         nextTeaMin = _addAccumulatedMinutes(accumMin: teaMinBase, startedAtIso: teaStarted, nowIso: nowIso);
         nextTeaStarted = null;
         nextTeaInAt = nowIso;
+        final ts = teaStarted?.trim();
+        if (ts != null && ts.isNotEmpty) {
+          teaSeg = [...teaSeg, {'out': ts, 'in': nowIso}];
+        }
       }
     } else {
-      // stop other break if running
       if (isLunch && teaStarted != null && teaStarted.trim().isNotEmpty) {
         nextTeaMin = _addAccumulatedMinutes(accumMin: teaMinBase, startedAtIso: teaStarted, nowIso: nowIso);
         nextTeaStarted = null;
         nextTeaInAt = nowIso;
+        final ts = teaStarted.trim();
+        teaSeg = [...teaSeg, {'out': ts, 'in': nowIso}];
       }
       if (!isLunch && lunchStarted != null && lunchStarted.trim().isNotEmpty) {
         nextLunchMin = _addAccumulatedMinutes(accumMin: lunchMinBase, startedAtIso: lunchStarted, nowIso: nowIso);
         nextLunchStarted = null;
         nextLunchInAt = nowIso;
+        final ls = lunchStarted.trim();
+        lunchSeg = [...lunchSeg, {'out': ls, 'in': nowIso}];
       }
-      // start this break
       if (isLunch) {
         nextLunchStarted = nowIso;
         nextLunchOutAt = (nextLunchOutAt == null || nextLunchOutAt.trim().isEmpty) ? nowIso : nextLunchOutAt;
@@ -603,19 +760,41 @@ class RpcService {
           'tea_break_minutes': nextTeaMin,
           'lunch_break_started_at': nextLunchStarted,
           'tea_break_started_at': nextTeaStarted,
-          'lunch_check_out_at': nextLunchOutAt ?? null,
-          'lunch_check_in_at': nextLunchInAt ?? null,
-          'tea_check_out_at': nextTeaOutAt ?? null,
-          'tea_check_in_at': nextTeaInAt ?? null,
+          'lunch_check_out_at': nextLunchOutAt,
+          'lunch_check_in_at': nextLunchInAt,
+          'tea_check_out_at': nextTeaOutAt,
+          'tea_check_in_at': nextTeaInAt,
+          'lunch_break_segments': lunchSeg,
+          'tea_break_segments': teaSeg,
           'updated_at': nowIso,
         })
         .eq('id', existing['id'])
         .select(
-          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, status, in_office, office_note, notes',
+          'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_break_started_at, tea_break_started_at, '
+          'lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, lunch_break_segments, tea_break_segments, status, in_office, office_note, notes, check_out_at',
         )
         .single();
 
-    return Map<String, dynamic>.from(updated as Map);
+    final urow = Map<String, dynamic>.from(updated as Map);
+    String st;
+    if (urow['check_out_at'] != null) {
+      st = 'INACTIVE';
+    } else if (urow['lunch_break_started_at'] != null) {
+      st = 'LUNCH';
+    } else if (urow['tea_break_started_at'] != null) {
+      st = 'BREAK';
+    } else {
+      st = 'ACTIVE';
+    }
+    await _bestEffortUpsertAttendanceState(
+      companyId: companyId,
+      employeeId: empId,
+      attendanceLogId: urow['id']?.toString(),
+      workDate: wd,
+      status: st,
+    );
+
+    return urow;
   }
 
   Future<Map<String, dynamic>> attendancePunch({
@@ -901,12 +1080,4 @@ class RpcService {
     return Map<String, dynamic>.from(res as Map);
   }
 }
-
-class _Math {
-  double sin(double x) => math.sin(x);
-  double cos(double x) => math.cos(x);
-  double sqrt(double x) => math.sqrt(x);
-  double atan2(double y, double x) => math.atan2(y, x);
-}
-
 

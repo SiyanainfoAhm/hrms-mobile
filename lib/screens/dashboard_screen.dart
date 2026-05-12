@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
+import '../ui/formatters.dart';
 import '../ui/hrms_card.dart';
 import '../widgets/app_drawer.dart';
 
@@ -462,8 +463,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     if (companyId.isEmpty || u == null)
                       const Text('No company assigned.')
                     else
-                      FutureBuilder(
-                        future: RpcService().payslipsList(companyId: companyId, employeeUserId: u.id),
+                      FutureBuilder<Map<String, dynamic>>(
+                        future: RpcService().payslipsMe(userId: u.id, companyId: u.companyId),
                         builder: (context, snap) {
                           if (snap.connectionState != ConnectionState.done) {
                             return Text('Loading…', style: Theme.of(context).textTheme.bodySmall);
@@ -471,10 +472,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           if (snap.hasError) {
                             return Text('Error: ${snap.error}', style: const TextStyle(color: HrmsTokens.danger));
                           }
-                          final rows = (snap.data ?? const <Map<String, dynamic>>[]);
+                          final data = snap.data;
+                          final rows = (data?['payslips'] as List?) ?? const [];
                           if (rows.isEmpty) return Text('No payslips found.', style: Theme.of(context).textTheme.bodySmall);
-                          final p = rows.first;
+                          final p = Map<String, dynamic>.from(rows.first as Map);
                           final dateLabel = _formatIndianDate(p['generated_at']);
+                          final net = num.tryParse((p['net_pay'] ?? '').toString());
+                          final netLabel = net != null ? UiFormatters.inr(net) : (p['net_pay'] ?? '—').toString();
                           return Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -486,7 +490,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ],
                               ),
                               Text(
-                                'Net: ${p['net_pay'] ?? '—'}',
+                                'Net: $netLabel',
                                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
                               ),
                             ],

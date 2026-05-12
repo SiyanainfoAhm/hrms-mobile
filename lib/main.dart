@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'services/runtime_config.dart';
 import 'services/supabase_client.dart';
 import 'services/rpc_service.dart';
+import 'services/attendance_timezone.dart';
 import 'state/app_state.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
@@ -23,6 +24,7 @@ import 'theme/hrms_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  ensureAttendanceTimeZonesInitialized();
   await RuntimeConfig.instance.load();
   await SupabaseApp.init();
   runApp(const HrmsApp());

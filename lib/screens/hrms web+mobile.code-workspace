@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../.."
+		},
+		{
+			"path": "../../../hrms_attendance_agent"
 		}
 	],
 	"settings": {}

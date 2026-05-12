@@ -9,22 +9,39 @@ import '../ui/hrms_card.dart';
 import '../ui/status_chip.dart';
 import '../widgets/app_drawer.dart';
 
-class ReimbursementsScreen extends StatelessWidget {
+class ReimbursementsScreen extends StatefulWidget {
   const ReimbursementsScreen({super.key, required this.app});
 
   final AppState app;
 
-  Future<void> _openCreate(BuildContext context, {required String companyId, required String userId}) async {
+  @override
+  State<ReimbursementsScreen> createState() => _ReimbursementsScreenState();
+}
+
+class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
+  int _listEpoch = 0;
+
+  Future<void> _openCreate(
+    BuildContext context, {
+    required String companyId,
+    required String actorUserId,
+    required bool isAdmin,
+    required List<Map<String, dynamic>> employees,
+  }) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _CreateReimbursementSheet(
-        onCreate: (category, amount, claimDateYmd, desc, attachment) async {
+        isAdmin: isAdmin,
+        employees: employees,
+        actorUserId: actorUserId,
+        onCreate: (targetUserId, category, amount, claimDateYmd, desc, attachment) async {
           await RpcService().reimbursementCreate(
             companyId: companyId,
-            userId: userId,
+            userId: targetUserId,
+            actorUserId: actorUserId,
             category: category,
             amount: amount,
             claimDateYmd: claimDateYmd,
@@ -38,7 +55,7 @@ class ReimbursementsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final u = app.user;
+    final u = widget.app.user;
     final companyId = u?.companyId ?? '';
     final userId = u?.id ?? '';
     final isAdmin = u?.isManagerial == true;
@@ -46,12 +63,24 @@ class ReimbursementsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Reimbursements')),
-      drawer: AppDrawer(app: app),
+      drawer: AppDrawer(app: widget.app),
       floatingActionButton: (companyId.isEmpty || userId.isEmpty)
           ? null
           : FloatingActionButton(
               onPressed: () async {
-                await _openCreate(context, companyId: companyId, userId: userId);
+                var employees = const <Map<String, dynamic>>[];
+                if (isAdmin) {
+                  employees = await RpcService().employeesList(companyId, 'current');
+                }
+                if (!context.mounted) return;
+                await _openCreate(
+                  context,
+                  companyId: companyId,
+                  actorUserId: userId,
+                  isAdmin: isAdmin,
+                  employees: employees,
+                );
+                if (mounted) setState(() => _listEpoch++);
               },
               child: const Icon(Icons.add),
             ),
@@ -64,6 +93,7 @@ class ReimbursementsScreen extends StatelessWidget {
                 icon: Icons.business_outlined,
               )
             : FutureBuilder(
+                key: ValueKey(_listEpoch),
                 future: RpcService().reimbursementsList(companyId: companyId, userId: userId, scope: scope),
                 builder: (context, snap) {
                   if (snap.connectionState != ConnectionState.done) {
@@ -93,6 +123,9 @@ class ReimbursementsScreen extends StatelessWidget {
                       final r = rows[i];
                       final status = (r['status'] ?? '').toString();
                       final canDecide = isAdmin && status == 'pending';
+                      final py = r['payroll_year'];
+                      final pm = r['payroll_month'];
+                      final payrollLabel = (py != null && pm != null) ? 'Payroll: $py-${pm.toString().padLeft(2, '0')}' : null;
                       return HrmsCard(
                         title: (r['category'] ?? '').toString(),
                         subtitle: isAdmin ? (r['employee_name'] ?? '—').toString() : 'Claimed by you',
@@ -110,6 +143,10 @@ class ReimbursementsScreen extends StatelessWidget {
                                 ),
                               ],
                             ),
+                            if (payrollLabel != null) ...[
+                              const SizedBox(height: 6),
+                              Text(payrollLabel, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54)),
+                            ],
                             if ((r['description'] ?? '').toString().trim().isNotEmpty) ...[
                               const SizedBox(height: 8),
                               Text((r['description'] ?? '').toString(), style: Theme.of(context).textTheme.bodySmall),
@@ -127,7 +164,7 @@ class ReimbursementsScreen extends StatelessWidget {
                                           reimbursementId: r['id'].toString(),
                                           status: 'approved',
                                         );
-                                        if (context.mounted) (context as Element).markNeedsBuild();
+                                        if (mounted) setState(() => _listEpoch++);
                                       },
                                       child: const Text('Approve'),
                                     ),
@@ -143,7 +180,7 @@ class ReimbursementsScreen extends StatelessWidget {
                                           status: 'rejected',
                                           rejectionReason: 'Rejected from mobile',
                                         );
-                                        if (context.mounted) (context as Element).markNeedsBuild();
+                                        if (mounted) setState(() => _listEpoch++);
                                       },
                                       child: const Text('Reject'),
                                     ),
@@ -158,7 +195,7 @@ class ReimbursementsScreen extends StatelessWidget {
                                           reimbursementId: r['id'].toString(),
                                           status: 'paid',
                                         );
-                                        if (context.mounted) (context as Element).markNeedsBuild();
+                                        if (mounted) setState(() => _listEpoch++);
                                       },
                                       child: const Text('Paid'),
                                     ),
@@ -179,8 +216,23 @@ class ReimbursementsScreen extends StatelessWidget {
 }
 
 class _CreateReimbursementSheet extends StatefulWidget {
-  const _CreateReimbursementSheet({required this.onCreate});
-  final Future<void> Function(String category, num amount, String claimDateYmd, String? desc, String? attachmentUrl) onCreate;
+  const _CreateReimbursementSheet({
+    required this.isAdmin,
+    required this.employees,
+    required this.actorUserId,
+    required this.onCreate,
+  });
+  final bool isAdmin;
+  final List<Map<String, dynamic>> employees;
+  final String actorUserId;
+  final Future<void> Function(
+    String targetUserId,
+    String category,
+    num amount,
+    String claimDateYmd,
+    String description,
+    String attachmentUrl,
+  ) onCreate;
 
   @override
   State<_CreateReimbursementSheet> createState() => _CreateReimbursementSheetState();
@@ -188,12 +240,21 @@ class _CreateReimbursementSheet extends StatefulWidget {
 
 class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
   final _formKey = GlobalKey<FormState>();
+  String? targetUserId;
   final category = TextEditingController();
   final amount = TextEditingController();
   final claimDate = TextEditingController();
   final desc = TextEditingController();
   final attachment = TextEditingController();
   bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.isAdmin) {
+      targetUserId = widget.actorUserId;
+    }
+  }
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
@@ -270,6 +331,25 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                     child: Column(
                       children: [
+                        if (widget.isAdmin) ...[
+                          DropdownButtonFormField<String>(
+                            value: targetUserId,
+                            items: widget.employees
+                                .map((e) => DropdownMenuItem(
+                                      value: e['id']?.toString(),
+                                      child: Text((e['name'] ?? e['email'] ?? 'Employee').toString()),
+                                    ))
+                                .where((it) => (it.value ?? '').toString().isNotEmpty)
+                                .toList(),
+                            onChanged: busy ? null : (v) => setState(() => targetUserId = v),
+                            decoration: const InputDecoration(
+                              labelText: 'Employee',
+                              prefixIcon: Icon(Icons.person_search_outlined),
+                            ),
+                            validator: (v) => (v ?? '').trim().isEmpty ? 'Select an employee' : null,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         TextFormField(
                           controller: category,
                           textInputAction: TextInputAction.next,
@@ -312,18 +392,20 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                           controller: desc,
                           textInputAction: TextInputAction.next,
                           decoration: const InputDecoration(
-                            labelText: 'Description (optional)',
+                            labelText: 'Description',
                             prefixIcon: Icon(Icons.notes_outlined),
                           ),
                           maxLines: 2,
+                          validator: (v) => (v ?? '').trim().isEmpty ? 'Description is required' : null,
                         ),
                         const SizedBox(height: 12),
                         TextFormField(
                           controller: attachment,
                           decoration: const InputDecoration(
-                            labelText: 'Attachment URL (optional)',
+                            labelText: 'Attachment URL',
                             prefixIcon: Icon(Icons.link_outlined),
                           ),
+                          validator: (v) => (v ?? '').trim().isEmpty ? 'Attachment URL is required' : null,
                         ),
                       ],
                     ),
@@ -350,14 +432,11 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                                   final c = category.text.trim();
                                   final a = num.tryParse(amount.text.trim())!;
                                   final dt = claimDate.text.trim();
+                                  final d = desc.text.trim();
+                                  final att = attachment.text.trim();
                                   setState(() => busy = true);
-                                  await widget.onCreate(
-                                    c,
-                                    a,
-                                    dt,
-                                    desc.text.trim().isEmpty ? null : desc.text.trim(),
-                                    attachment.text.trim().isEmpty ? null : attachment.text.trim(),
-                                  );
+                                  final tid = targetUserId ?? widget.actorUserId;
+                                  await widget.onCreate(tid, c, a, dt, d, att);
                                   if (context.mounted) Navigator.pop(context);
                                 },
                           child: Text(busy ? 'Creating…' : 'Create'),
@@ -374,4 +453,3 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
     );
   }
 }
-

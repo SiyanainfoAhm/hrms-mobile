@@ -40,6 +40,7 @@ dependencies:
   pdf: ^3.11.3
   url_launcher: ^6.3.1
   geolocator: ^14.0.2
+  timezone: ^0.10.0
 
 dev_dependencies:
   flutter_test:
