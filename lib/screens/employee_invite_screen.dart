@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../services/invite_edge_service.dart';
@@ -87,7 +88,7 @@ class _EmployeeInviteScreenState extends State<EmployeeInviteScreen> {
 
   String? _inviteUrlForToken(String? token) {
     if (token == null || token.isEmpty) return null;
-    final base = AppConfig.webAppInviteBaseUrl.trim();
+    final base = AppConfig.inviteLinkBaseUrl.trim();
     if (base.isEmpty) return null;
     return '$base/invite/$token';
   }
@@ -117,7 +118,7 @@ class _EmployeeInviteScreenState extends State<EmployeeInviteScreen> {
     final url = _inviteUrlForToken(token);
     if (url == null) {
       _snack(
-        'Set webAppInviteBaseUrl in assets/config.json (your deployed web HRMS URL, same as NEXT_PUBLIC_APP_URL).',
+        'Set inviteWebOnlyBaseUrl or webAppInviteBaseUrl in assets/config.json (deployed web HRMS origin, same as NEXT_PUBLIC_APP_URL).',
         err: true,
       );
       return;
@@ -143,12 +144,25 @@ class _EmployeeInviteScreenState extends State<EmployeeInviteScreen> {
     final token = _invite?['token']?.toString();
     final url = _inviteUrlForToken(token);
     if (url == null) {
-      _snack('Set webAppInviteBaseUrl in config, or create an invite first.', err: true);
+      _snack('Set inviteWebOnlyBaseUrl or webAppInviteBaseUrl in config, or create an invite first.', err: true);
       return;
     }
     await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
     _snack('Invite link copied');
+  }
+
+  Future<void> _openInviteOnWeb() async {
+    final token = _invite?['token']?.toString();
+    final url = _inviteUrlForToken(token);
+    if (url == null) {
+      _snack('Set inviteWebOnlyBaseUrl or webAppInviteBaseUrl in config, or create an invite first.', err: true);
+      return;
+    }
+    final uri = Uri.parse(url);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) _snack('Could not open browser', err: true);
   }
 
   Future<void> _showResendDialog() async {
@@ -249,9 +263,9 @@ class _EmployeeInviteScreenState extends State<EmployeeInviteScreen> {
                           }
                         } else if (url != null) {
                           await Clipboard.setData(ClipboardData(text: url));
-                          _snack(sendEmail ? 'Set webAppInviteBaseUrl to send email. Link copied.' : 'Link copied.');
+                            _snack(sendEmail ? 'Set invite / web base URL in config to send email. Link copied.' : 'Link copied.');
                         } else {
-                          _snack('Invite created. Set webAppInviteBaseUrl to copy/send link.', err: true);
+                          _snack('Invite created. Set inviteWebOnlyBaseUrl or webAppInviteBaseUrl to copy/send link.', err: true);
                         }
                       } catch (e) {
                         if (ctx.mounted) {
@@ -345,6 +359,7 @@ class _EmployeeInviteScreenState extends State<EmployeeInviteScreen> {
                             child: const Text('Send invite email'),
                           ),
                           OutlinedButton(onPressed: _copyInviteLink, child: const Text('Copy link')),
+                          OutlinedButton(onPressed: _openInviteOnWeb, child: const Text('Open invite on web')),
                           OutlinedButton(onPressed: _showResendDialog, child: const Text('New link / resend')),
                         ],
                       ),

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../state/app_state.dart';
+import '../services/leave_booking_calc.dart';
 import '../services/rpc_service.dart';
+import '../state/app_state.dart';
 import '../theme/tokens.dart';
 import '../ui/empty_state.dart';
 import '../ui/formatters.dart';
@@ -28,19 +30,23 @@ class _LeaveScreenState extends State<LeaveScreen> {
     required List<Map<String, dynamic>> leaveTypes,
     required RpcService svc,
     required List<Map<String, dynamic>> employees,
+    required List<Map<String, dynamic>> holidays,
     required bool isAdmin,
   }) async {
-    await showModalBottomSheet(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _CreateLeaveSheet(
+        companyId: companyId,
+        svc: svc,
+        holidays: holidays,
         isAdmin: isAdmin,
         employees: employees,
         actorUserId: actorUserId,
         leaveTypes: leaveTypes,
-        onCreate: (targetUserId, leaveTypeId, startYmd, endYmd, days, reason) async {
+        onCreate: (targetUserId, leaveTypeId, startYmd, endYmd, days, reason, isHalfDay) async {
           await svc.leaveRequestCreate(
             companyId: companyId,
             userId: targetUserId,
@@ -50,6 +56,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
             endDateYmd: endYmd,
             totalDays: days,
             reason: reason,
+            isHalfDay: isHalfDay,
           );
         },
       ),
@@ -73,6 +80,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
               onPressed: () async {
                 final svc = RpcService();
                 final types = await svc.leaveTypesList(companyId);
+                final holidays = await svc.holidaysList(companyId);
                 var employees = const <Map<String, dynamic>>[];
                 if (isAdmin) {
                   employees = await svc.employeesList(companyId, 'current');
@@ -85,6 +93,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
                   leaveTypes: types,
                   svc: svc,
                   employees: employees,
+                  holidays: holidays,
                   isAdmin: isAdmin,
                 );
                 if (mounted) setState(() => _listEpoch++);
@@ -226,17 +235,24 @@ class _LeaveScreenState extends State<LeaveScreen> {
 
 class _CreateLeaveSheet extends StatefulWidget {
   const _CreateLeaveSheet({
+    required this.companyId,
+    required this.svc,
+    required this.holidays,
     required this.isAdmin,
     required this.employees,
     required this.actorUserId,
     required this.leaveTypes,
     required this.onCreate,
   });
+
+  final String companyId;
+  final RpcService svc;
+  final List<Map<String, dynamic>> holidays;
   final bool isAdmin;
   final List<Map<String, dynamic>> employees;
   final String actorUserId;
   final List<Map<String, dynamic>> leaveTypes;
-  final Future<void> Function(String targetUserId, String leaveTypeId, String startYmd, String endYmd, num days, String? reason) onCreate;
+  final Future<void> Function(String targetUserId, String leaveTypeId, String startYmd, String endYmd, num days, String? reason, bool isHalfDay) onCreate;
 
   @override
   State<_CreateLeaveSheet> createState() => _CreateLeaveSheetState();
@@ -248,32 +264,104 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
   String? targetUserId;
   final start = TextEditingController();
   final end = TextEditingController();
-  final days = TextEditingController(text: '1');
   final reason = TextEditingController();
   bool busy = false;
+  /// Single calendar day, non-HL: optional 0.5 day (same rules as web Approvals leave form).
+  bool _singleDayHalfDay = false;
+  List<Map<String, dynamic>> _overlapRows = [];
+  String? _employeeDivisionId;
+
+  String _leaveCode() {
+    for (final x in widget.leaveTypes) {
+      if (x['id']?.toString() == typeId) return (x['code'] ?? '').toString();
+    }
+    return '';
+  }
+
+  bool _singleDayHalfDayEligible() {
+    if (typeId == null) return false;
+    final s = start.text.trim();
+    final e = end.text.trim();
+    if (s.isEmpty || e.isEmpty || s != e) return false;
+    return _leaveCode().toUpperCase() != 'HL';
+  }
+
+  /// Same rounding as web `fmtDays` in ApprovalsContent (`Math.round(n * 2) / 2`).
+  String _fmtDays(num n) {
+    if (!n.isFinite) return '0';
+    final rounded = (n * 2).round() / 2.0;
+    if ((rounded * 2).round() % 2 == 0) return rounded.toInt().toString();
+    return rounded.toStringAsFixed(1);
+  }
+
+  LeaveBookingSummary _computeSummary() {
+    final s = start.text.trim();
+    final e = end.text.trim();
+    final tid = targetUserId ?? widget.actorUserId;
+    if (tid.isEmpty || typeId == null || s.isEmpty || e.isEmpty) {
+      return LeaveBookingSummary(
+        calendarSpanDays: 0,
+        weekendDaysExcluded: 0,
+        holidayDaysExcluded: 0,
+        workingDaysInRange: 0,
+        chargeableDays: 0,
+        overlapError: null,
+      );
+    }
+    final code = _leaveCode();
+    final half = _singleDayHalfDayEligible() && _singleDayHalfDay && code.toUpperCase() != 'HL';
+    return computeLeaveBookingSummary(
+      startYmd: s,
+      endYmd: e,
+      holidays: widget.holidays,
+      employeeDivisionId: _employeeDivisionId,
+      existingLeaves: _overlapRows,
+      leaveTypeCodeUpper: code,
+      isHalfDay: half,
+    );
+  }
+
+  Future<void> _reloadOverlap() async {
+    final tid = targetUserId ?? widget.actorUserId;
+    if (tid.isEmpty) {
+      setState(() {
+        _overlapRows = [];
+        _employeeDivisionId = null;
+      });
+      return;
+    }
+    try {
+      final map = await widget.svc.leaveOverlapContext(
+        companyId: widget.companyId,
+        actorUserId: widget.actorUserId,
+        targetUserId: tid,
+      );
+      if (!mounted) return;
+      setState(() {
+        _overlapRows = overlapRequestsFromJson(map);
+        _employeeDivisionId = employeeDivisionFromOverlapJson(map);
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _overlapRows = [];
+        _employeeDivisionId = null;
+      });
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     if (!widget.isAdmin) {
       targetUserId = widget.actorUserId;
+    } else if (widget.employees.isNotEmpty) {
+      targetUserId = widget.employees.first['id']?.toString();
     }
-  }
-
-  int? _calcInclusiveDays() {
-    final s = DateTime.tryParse(start.text.trim());
-    final e = DateTime.tryParse(end.text.trim());
-    if (s == null || e == null) return null;
-    final ss = DateTime(s.year, s.month, s.day);
-    final ee = DateTime(e.year, e.month, e.day);
-    if (ee.isBefore(ss)) return null;
-    return ee.difference(ss).inDays + 1;
-  }
-
-  void _syncDays() {
-    final d = _calcInclusiveDays();
-    if (d == null) return;
-    days.text = d.toString();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _reloadOverlap();
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _pickStart() async {
@@ -290,7 +378,11 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
     final d = picked.day.toString().padLeft(2, '0');
     start.text = '$y-$m-$d';
     if (end.text.trim().isEmpty) end.text = start.text;
-    _syncDays();
+    if (mounted) {
+      setState(() {
+        if (!_singleDayHalfDayEligible()) _singleDayHalfDay = false;
+      });
+    }
   }
 
   Future<void> _pickEnd() async {
@@ -307,14 +399,24 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
     final m = picked.month.toString().padLeft(2, '0');
     final d = picked.day.toString().padLeft(2, '0');
     end.text = '$y-$m-$d';
-    _syncDays();
+    if (mounted) {
+      setState(() {
+        if (!_singleDayHalfDayEligible()) _singleDayHalfDay = false;
+      });
+    }
+  }
+
+  void _snack(String msg, {bool err = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: err ? Colors.red : null),
+    );
   }
 
   @override
   void dispose() {
     start.dispose();
     end.dispose();
-    days.dispose();
     reason.dispose();
     super.dispose();
   }
@@ -322,6 +424,7 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
   @override
   Widget build(BuildContext context) {
     final bottomPad = MediaQuery.of(context).viewInsets.bottom;
+    final summary = _computeSummary();
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -365,18 +468,30 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (widget.isAdmin) ...[
                           DropdownButtonFormField<String>(
                             value: targetUserId,
                             items: widget.employees
-                                .map((e) => DropdownMenuItem(
-                                      value: e['id']?.toString(),
-                                      child: Text((e['name'] ?? e['email'] ?? 'Employee').toString()),
-                                    ))
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e['id']?.toString(),
+                                    child: Text((e['name'] ?? e['email'] ?? 'Employee').toString()),
+                                  ),
+                                )
                                 .where((it) => (it.value ?? '').toString().isNotEmpty)
                                 .toList(),
-                            onChanged: busy ? null : (v) => setState(() => targetUserId = v),
+                            onChanged: busy
+                                ? null
+                                : (v) async {
+                                    setState(() => targetUserId = v);
+                                    await _reloadOverlap();
+                                    if (!mounted) return;
+                                    setState(() {
+                                      if (!_singleDayHalfDayEligible()) _singleDayHalfDay = false;
+                                    });
+                                  },
                             decoration: const InputDecoration(
                               labelText: 'Employee',
                               prefixIcon: Icon(Icons.person_search_outlined),
@@ -388,12 +503,19 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
                         DropdownButtonFormField<String>(
                           value: typeId,
                           items: widget.leaveTypes
-                              .map((t) => DropdownMenuItem(
-                                    value: t['id'].toString(),
-                                    child: Text((t['name'] ?? '').toString()),
-                                  ))
+                              .map(
+                                (t) => DropdownMenuItem(
+                                  value: t['id'].toString(),
+                                  child: Text((t['name'] ?? '').toString()),
+                                ),
+                              )
                               .toList(),
-                          onChanged: busy ? null : (v) => setState(() => typeId = v),
+                          onChanged: busy
+                              ? null
+                              : (v) => setState(() {
+                                    typeId = v;
+                                    if (!_singleDayHalfDayEligible()) _singleDayHalfDay = false;
+                                  }),
                           decoration: const InputDecoration(
                             labelText: 'Leave type',
                             prefixIcon: Icon(Icons.badge_outlined),
@@ -424,24 +546,80 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
                             prefixIcon: const Icon(Icons.event_available_outlined),
                             suffixText: end.text.trim().isEmpty ? null : UiFormatters.indianDate(end.text.trim()),
                           ),
-                          validator: (v) => (v ?? '').trim().isEmpty ? 'End date is required' : null,
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          controller: days,
-                          decoration: const InputDecoration(
-                            labelText: 'Total days',
-                            prefixIcon: Icon(Icons.timelapse_outlined),
-                          ),
-                          readOnly: true,
-                          keyboardType: TextInputType.number,
                           validator: (v) {
-                            final d = num.tryParse((v ?? '').trim());
-                            if (d == null || d <= 0) return 'Enter total days';
+                            if ((v ?? '').trim().isEmpty) return 'End date is required';
+                            final s = start.text.trim();
+                            final e = (v ?? '').trim();
+                            if (s.isNotEmpty && e.compareTo(s) < 0) return 'End must be on or after start';
                             return null;
                           },
                         ),
                         const SizedBox(height: 12),
+                        if (_singleDayHalfDayEligible()) ...[
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('Half day (0.5) — single date only; leave unchecked for a full day'),
+                            value: _singleDayHalfDay,
+                            onChanged: busy
+                                ? null
+                                : (v) => setState(() => _singleDayHalfDay = v ?? false),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        if (start.text.trim().isNotEmpty && end.text.trim().isNotEmpty) ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: const Color(0xFFE2E8F0)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Leave calculation',
+                                  style: Theme.of(context).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Calendar span: ${summary.calendarSpanDays} day(s) · '
+                                  'Excludes ${summary.weekendDaysExcluded} weekend · '
+                                  '${summary.holidayDaysExcluded} holiday',
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Charged leave: ${_fmtDays(summary.chargeableDays)} '
+                                  '${summary.chargeableDays == 1 || summary.chargeableDays == 0.5 ? 'day' : 'days'}',
+                                  style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                                ),
+                                if (summary.overlapError != null) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    summary.overlapError!,
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red.shade800),
+                                  ),
+                                ] else if (summary.calendarSpanDays > 0 && summary.workingDaysInRange <= 0) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'No chargeable leave days in this range (weekends and holidays are excluded).',
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red.shade800),
+                                  ),
+                                ] else if (_singleDayHalfDayEligible() && _singleDayHalfDay && summary.workingDaysInRange != 1) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Half day is only available on a single working day (not on a weekend or holiday).',
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.red.shade800),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         TextFormField(
                           controller: reason,
                           decoration: const InputDecoration(
@@ -472,20 +650,55 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
                               : () async {
                                   final ok = _formKey.currentState?.validate() ?? false;
                                   if (!ok) return;
+                                  final sum = _computeSummary();
+                                  if (sum.overlapError != null) {
+                                    _snack(sum.overlapError!, err: true);
+                                    return;
+                                  }
+                                  // Same order as web `leaveErrors.booking` (ApprovalsContent).
+                                  if (sum.calendarSpanDays > 0 && sum.workingDaysInRange <= 0) {
+                                    _snack(
+                                      'No chargeable leave days in this range (weekends and holidays are excluded).',
+                                      err: true,
+                                    );
+                                    return;
+                                  }
+                                  if (_singleDayHalfDayEligible() && _singleDayHalfDay && sum.workingDaysInRange != 1) {
+                                    _snack(
+                                      'Half day is only available on a single working day (not on a weekend or holiday).',
+                                      err: true,
+                                    );
+                                    return;
+                                  }
+                                  if (sum.chargeableDays <= 0) {
+                                    _snack(
+                                      'No chargeable leave days in this range (weekends and holidays are excluded).',
+                                      err: true,
+                                    );
+                                    return;
+                                  }
                                   final s = start.text.trim();
                                   final e = end.text.trim();
-                                  final d = num.tryParse(days.text.trim()) ?? 1;
                                   setState(() => busy = true);
                                   final tid = targetUserId ?? widget.actorUserId;
-                                  await widget.onCreate(
-                                    tid,
-                                    typeId!,
-                                    s,
-                                    e,
-                                    d,
-                                    reason.text.trim().isEmpty ? null : reason.text.trim(),
-                                  );
-                                  if (context.mounted) Navigator.pop(context);
+                                  try {
+                                    await widget.onCreate(
+                                      tid,
+                                      typeId!,
+                                      s,
+                                      e,
+                                      sum.chargeableDays,
+                                      reason.text.trim().isEmpty ? null : reason.text.trim(),
+                                      _singleDayHalfDayEligible() && _singleDayHalfDay,
+                                    );
+                                    if (context.mounted) Navigator.pop(context);
+                                  } on PostgrestException catch (ex) {
+                                    _snack(ex.message.trim().isNotEmpty ? ex.message : 'Request failed', err: true);
+                                  } catch (ex) {
+                                    _snack(ex.toString(), err: true);
+                                  } finally {
+                                    if (mounted) setState(() => busy = false);
+                                  }
                                 },
                           child: Text(busy ? 'Creating…' : 'Create'),
                         ),
@@ -501,4 +714,3 @@ class _CreateLeaveSheetState extends State<_CreateLeaveSheet> {
     );
   }
 }
-

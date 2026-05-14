@@ -22,6 +22,9 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   bool _busy = false;
   String? _err;
   String? _ok;
+  bool _currentVisible = false;
+  bool _nextVisible = false;
+  bool _confirmVisible = false;
 
   @override
   void dispose() {
@@ -88,25 +91,80 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
               style: TextStyle(color: HrmsTokens.muted),
             ),
             const SizedBox(height: HrmsTokens.s4),
-            TextField(
-              controller: _current,
-              decoration: const InputDecoration(hintText: 'Current password'),
-              obscureText: true,
-              enabled: !_busy,
-            ),
-            const SizedBox(height: HrmsTokens.s3),
-            TextField(
-              controller: _next,
-              decoration: const InputDecoration(hintText: 'New password'),
-              obscureText: true,
-              enabled: !_busy,
-            ),
-            const SizedBox(height: HrmsTokens.s3),
-            TextField(
-              controller: _confirm,
-              decoration: const InputDecoration(hintText: 'Confirm new password'),
-              obscureText: true,
-              enabled: !_busy,
+            AutofillGroup(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: _current,
+                    obscureText: !_currentVisible,
+                    obscuringCharacter: '•',
+                    keyboardType: TextInputType.visiblePassword,
+                    textInputAction: TextInputAction.next,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    enableIMEPersonalizedLearning: false,
+                    autofillHints: const [AutofillHints.password],
+                    decoration: InputDecoration(
+                      hintText: 'Current password',
+                      suffixIcon: IconButton(
+                        tooltip: _currentVisible ? 'Hide password' : 'Show password',
+                        onPressed: () => setState(() => _currentVisible = !_currentVisible),
+                        icon: Icon(_currentVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                      ),
+                    ),
+                    enabled: !_busy,
+                  ),
+                  const SizedBox(height: HrmsTokens.s3),
+                  TextField(
+                    controller: _next,
+                    obscureText: !_nextVisible,
+                    obscuringCharacter: '•',
+                    keyboardType: TextInputType.visiblePassword,
+                    textInputAction: TextInputAction.next,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    enableIMEPersonalizedLearning: false,
+                    autofillHints: const [AutofillHints.newPassword],
+                    decoration: InputDecoration(
+                      hintText: 'New password',
+                      suffixIcon: IconButton(
+                        tooltip: _nextVisible ? 'Hide password' : 'Show password',
+                        onPressed: () => setState(() => _nextVisible = !_nextVisible),
+                        icon: Icon(_nextVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                      ),
+                    ),
+                    enabled: !_busy,
+                  ),
+                  const SizedBox(height: HrmsTokens.s3),
+                  TextField(
+                    controller: _confirm,
+                    obscureText: !_confirmVisible,
+                    obscuringCharacter: '•',
+                    keyboardType: TextInputType.visiblePassword,
+                    textInputAction: TextInputAction.done,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    enableIMEPersonalizedLearning: false,
+                    autofillHints: const [AutofillHints.newPassword],
+                    decoration: InputDecoration(
+                      hintText: 'Confirm new password',
+                      suffixIcon: IconButton(
+                        tooltip: _confirmVisible ? 'Hide password' : 'Show password',
+                        onPressed: () => setState(() => _confirmVisible = !_confirmVisible),
+                        icon: Icon(_confirmVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                      ),
+                    ),
+                    enabled: !_busy,
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: HrmsTokens.s4),
             if (_err != null) Text(_err!, style: const TextStyle(color: HrmsTokens.danger)),

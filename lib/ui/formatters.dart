@@ -85,5 +85,17 @@ class UiFormatters {
     final m = (dt.month >= 1 && dt.month <= 12) ? _months[dt.month - 1] : dt.month.toString();
     return '${dt.day.toString().padLeft(2, '0')} $m ${dt.year}';
   }
+
+  /// 1-based month index (1 = Jan).
+  static String monthShort(int month) {
+    final m = month.clamp(1, 12);
+    return _months[m - 1];
+  }
+
+  /// 1-based month index (1 = January).
+  static String monthLongName(int month) {
+    final m = month.clamp(1, 12);
+    return _monthsLong[m - 1];
+  }
 }
 

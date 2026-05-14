@@ -1,6 +1,14 @@
 {
-  "supabaseUrl": "https://fvveqziyusjgqejowkfp.supabase.co",
-  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2dmVxeml5dXNqZ3Flam93a2ZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTU5MzY5MDUsImV4cCI6MjAzMTUxMjkwNX0.71R7B0aqK7MvAppN-Bytj56VvKPeUFRGRyjKbZH0BBw",
-  "webAppInviteBaseUrl": "https://fvveqziyusjgqejowkfp.supabase.co/functions/v1/hrms-send-invite"
+  "supabaseUrl": "https://your-project.supabase.co",
+  "supabaseAnonKey": "your-anon-key",
+  "webAppInviteBaseUrl": "https://hrms-web-rage.vercel.app",
+  "googleWebClientId": "",
+  "googleIosClientId": "",
+  "inviteWebOnlyBaseUrl": "",
+  "transactionNotifyUrl": "https://hrms-web-rage.vercel.app/api/webhooks/hrms-transaction-notify",
+  "transactionNotifySecret": "",
+  "agentDownloadUrl": "",
+  "powerAutomateEmailUrl": "",
+  "notifyHrEmail": "",
+  "reimbursementStorageBucket": "photomedia"
 }
-

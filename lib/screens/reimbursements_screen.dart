@@ -1,6 +1,11 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
+import '../services/reimbursement_storage_upload.dart';
 import '../services/rpc_service.dart';
 import '../theme/tokens.dart';
 import '../ui/empty_state.dart';
@@ -28,16 +33,17 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
     required bool isAdmin,
     required List<Map<String, dynamic>> employees,
   }) async {
-    await showModalBottomSheet(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _CreateReimbursementSheet(
+        companyId: companyId,
         isAdmin: isAdmin,
         employees: employees,
         actorUserId: actorUserId,
-        onCreate: (targetUserId, category, amount, claimDateYmd, desc, attachment) async {
+        onCreate: (targetUserId, category, amount, claimDateYmd, desc, attachmentUrl) async {
           await RpcService().reimbursementCreate(
             companyId: companyId,
             userId: targetUserId,
@@ -46,11 +52,23 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
             amount: amount,
             claimDateYmd: claimDateYmd,
             description: desc,
-            attachmentUrl: attachment,
+            attachmentUrl: attachmentUrl,
           );
         },
       ),
     );
+  }
+
+  Future<void> _openAttachmentUrl(String url) async {
+    final u = Uri.tryParse(url.trim());
+    if (u == null || !u.hasScheme) return;
+    if (!await launchUrl(u, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open receipt link')),
+        );
+      }
+    }
   }
 
   @override
@@ -92,7 +110,7 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
                 subtitle: 'Ask your admin to assign you to a company to submit reimbursements.',
                 icon: Icons.business_outlined,
               )
-            : FutureBuilder(
+            : FutureBuilder<List<Map<String, dynamic>>>(
                 key: ValueKey(_listEpoch),
                 future: RpcService().reimbursementsList(companyId: companyId, userId: userId, scope: scope),
                 builder: (context, snap) {
@@ -106,7 +124,7 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
                       icon: Icons.error_outline,
                     );
                   }
-                  final rows = (snap.data ?? const <Map<String, dynamic>>[]);
+                  final rows = snap.data ?? const <Map<String, dynamic>>[];
                   if (rows.isEmpty) {
                     return EmptyState(
                       title: 'No reimbursements yet',
@@ -125,7 +143,9 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
                       final canDecide = isAdmin && status == 'pending';
                       final py = r['payroll_year'];
                       final pm = r['payroll_month'];
-                      final payrollLabel = (py != null && pm != null) ? 'Payroll: $py-${pm.toString().padLeft(2, '0')}' : null;
+                      final payrollLabel =
+                          (py != null && pm != null) ? 'Payroll: $py-${pm.toString().padLeft(2, '0')}' : null;
+                      final attUrl = (r['attachment_url'] ?? r['attachmentUrl'] ?? '').toString().trim();
                       return HrmsCard(
                         title: (r['category'] ?? '').toString(),
                         subtitle: isAdmin ? (r['employee_name'] ?? '—').toString() : 'Claimed by you',
@@ -150,6 +170,14 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
                             if ((r['description'] ?? '').toString().trim().isNotEmpty) ...[
                               const SizedBox(height: 8),
                               Text((r['description'] ?? '').toString(), style: Theme.of(context).textTheme.bodySmall),
+                            ],
+                            if (attUrl.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              TextButton.icon(
+                                onPressed: () => _openAttachmentUrl(attUrl),
+                                icon: const Icon(Icons.attach_file_outlined, size: 18),
+                                label: const Text('View receipt'),
+                              ),
                             ],
                             if (canDecide) ...[
                               const SizedBox(height: 10),
@@ -201,8 +229,8 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
                                     ),
                                   ),
                                 ],
-                              )
-                            ]
+                              ),
+                            ],
                           ],
                         ),
                       );
@@ -217,11 +245,14 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
 
 class _CreateReimbursementSheet extends StatefulWidget {
   const _CreateReimbursementSheet({
+    required this.companyId,
     required this.isAdmin,
     required this.employees,
     required this.actorUserId,
     required this.onCreate,
   });
+
+  final String companyId;
   final bool isAdmin;
   final List<Map<String, dynamic>> employees;
   final String actorUserId;
@@ -239,22 +270,104 @@ class _CreateReimbursementSheet extends StatefulWidget {
 }
 
 class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
+  static const int _maxBytes = reimbursementAttachmentMaxBytes;
+
   final _formKey = GlobalKey<FormState>();
   String? targetUserId;
   final category = TextEditingController();
   final amount = TextEditingController();
   final claimDate = TextEditingController();
   final desc = TextEditingController();
-  final attachment = TextEditingController();
   bool busy = false;
+  PlatformFile? _pickedReceipt;
 
   @override
   void initState() {
     super.initState();
     if (!widget.isAdmin) {
       targetUserId = widget.actorUserId;
+    } else if (widget.employees.isNotEmpty) {
+      targetUserId = widget.employees.first['id']?.toString();
     }
   }
+
+  Future<void> _showAttachmentOptions() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Take photo'),
+              subtitle: const Text('Use the camera for a receipt image'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.upload_file_outlined),
+              title: const Text('Choose file'),
+              subtitle: const Text('PDF or image from your device'),
+              onTap: () => Navigator.pop(ctx, 'file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'camera') {
+      await _pickReceiptFromCamera();
+    } else if (choice == 'file') {
+      await _pickReceiptFromFiles();
+    }
+  }
+
+  Future<void> _pickReceiptFromCamera() async {
+    try {
+      final x = await ImagePicker().pickImage(
+        source: ImageSource.camera,
+        imageQuality: 88,
+        maxWidth: 2400,
+      );
+      if (x == null || !mounted) return;
+      final bytes = await x.readAsBytes();
+      if (bytes.isEmpty) {
+        _snack('Choose a valid attachment file', err: true);
+        return;
+      }
+      if (bytes.length > _maxBytes) {
+        _snack('Attachment must be 8 MB or smaller', err: true);
+        return;
+      }
+      var name = x.name.trim();
+      if (name.isEmpty) {
+        name = 'receipt_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      } else if (!name.toLowerCase().contains('.')) {
+        name = '$name.jpg';
+      }
+      setState(() {
+        _pickedReceipt = PlatformFile(name: name, size: bytes.length, bytes: bytes);
+      });
+    } catch (e) {
+      if (mounted) {
+        _snack(e.toString(), err: true);
+      }
+    }
+  }
+
+  Future<void> _pickReceiptFromFiles() async {
+    final res = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif'],
+      withData: true,
+    );
+    if (res == null || res.files.isEmpty) return;
+    final f = res.files.first;
+    if (mounted) setState(() => _pickedReceipt = f);
+  }
+
+  int _receiptByteLength(PlatformFile f) => f.bytes?.length ?? f.size;
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
@@ -269,6 +382,24 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
     final m = picked.month.toString().padLeft(2, '0');
     final d = picked.day.toString().padLeft(2, '0');
     claimDate.text = '$y-$m-$d';
+    if (mounted) setState(() {});
+  }
+
+  String? _validateReceipt() {
+    if (_pickedReceipt == null) {
+      return 'Attachment is required (PDF, image, or camera; max 8 MB)';
+    }
+    final len = _receiptByteLength(_pickedReceipt!);
+    if (len <= 0) return 'Choose a valid attachment file';
+    if (len > _maxBytes) return 'Attachment must be 8 MB or smaller';
+    return null;
+  }
+
+  void _snack(String msg, {bool err = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: err ? Colors.red : null),
+    );
   }
 
   @override
@@ -277,13 +408,13 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
     amount.dispose();
     claimDate.dispose();
     desc.dispose();
-    attachment.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final bottomPad = MediaQuery.of(context).viewInsets.bottom;
+    final receiptErr = _validateReceipt();
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -330,15 +461,18 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (widget.isAdmin) ...[
                           DropdownButtonFormField<String>(
                             value: targetUserId,
                             items: widget.employees
-                                .map((e) => DropdownMenuItem(
-                                      value: e['id']?.toString(),
-                                      child: Text((e['name'] ?? e['email'] ?? 'Employee').toString()),
-                                    ))
+                                .map(
+                                  (e) => DropdownMenuItem(
+                                    value: e['id']?.toString(),
+                                    child: Text((e['name'] ?? e['email'] ?? 'Employee').toString()),
+                                  ),
+                                )
                                 .where((it) => (it.value ?? '').toString().isNotEmpty)
                                 .toList(),
                             onChanged: busy ? null : (v) => setState(() => targetUserId = v),
@@ -398,15 +532,34 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                           maxLines: 2,
                           validator: (v) => (v ?? '').trim().isEmpty ? 'Description is required' : null,
                         ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          controller: attachment,
-                          decoration: const InputDecoration(
-                            labelText: 'Attachment URL',
-                            prefixIcon: Icon(Icons.link_outlined),
-                          ),
-                          validator: (v) => (v ?? '').trim().isEmpty ? 'Attachment URL is required' : null,
+                        const SizedBox(height: 16),
+                        Text(
+                          'Attachment *',
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                         ),
+                        Text(
+                          '(PDF, image, or camera; max 8 MB)',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: busy ? null : _showAttachmentOptions,
+                          icon: const Icon(Icons.add_photo_alternate_outlined),
+                          label: Text(_pickedReceipt == null ? 'Add attachment' : 'Change attachment'),
+                        ),
+                        if (_pickedReceipt != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            _pickedReceipt!.name,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        if (receiptErr != null) ...[
+                          const SizedBox(height: 6),
+                          Text(receiptErr, style: TextStyle(color: Colors.red.shade800, fontSize: 12)),
+                        ],
                       ],
                     ),
                   ),
@@ -427,19 +580,39 @@ class _CreateReimbursementSheetState extends State<_CreateReimbursementSheet> {
                           onPressed: busy
                               ? null
                               : () async {
+                                  final attErr = _validateReceipt();
+                                  if (attErr != null) {
+                                    setState(() {});
+                                    _snack(attErr, err: true);
+                                    return;
+                                  }
                                   final ok = _formKey.currentState?.validate() ?? false;
                                   if (!ok) return;
+                                  final picked = _pickedReceipt!;
                                   final c = category.text.trim();
                                   final a = num.tryParse(amount.text.trim())!;
                                   final dt = claimDate.text.trim();
                                   final d = desc.text.trim();
-                                  final att = attachment.text.trim();
-                                  setState(() => busy = true);
                                   final tid = targetUserId ?? widget.actorUserId;
-                                  await widget.onCreate(tid, c, a, dt, d, att);
-                                  if (context.mounted) Navigator.pop(context);
+                                  setState(() => busy = true);
+                                  try {
+                                    final url = await uploadReimbursementReceiptToStorage(
+                                      companyId: widget.companyId,
+                                      picked: picked,
+                                    );
+                                    await widget.onCreate(tid, c, a, dt, d, url);
+                                    if (context.mounted) Navigator.pop(context);
+                                  } on StateError catch (e) {
+                                    _snack(e.message, err: true);
+                                  } on PostgrestException catch (ex) {
+                                    _snack(ex.message.trim().isNotEmpty ? ex.message : 'Request failed', err: true);
+                                  } catch (ex) {
+                                    _snack(ex.toString(), err: true);
+                                  } finally {
+                                    if (mounted) setState(() => busy = false);
+                                  }
                                 },
-                          child: Text(busy ? 'Creating…' : 'Create'),
+                          child: Text(busy ? 'Submitting…' : 'Submit claim'),
                         ),
                       ),
                     ],

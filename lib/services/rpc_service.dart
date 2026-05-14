@@ -1,12 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'leave_booking_calc.dart';
+
+import 'attendance_dashboard_calc.dart';
 import 'attendance_policy.dart';
 import 'attendance_timezone.dart';
 import 'ensure_employee_mirror.dart';
 import 'supabase_client.dart';
+import 'transaction_notify_service.dart';
 
 class RpcService {
   SupabaseClient get _sb => SupabaseApp.client;
@@ -152,8 +157,10 @@ class RpcService {
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
+    // Match hrms-web `findUserByEmail` (trim + lowercase) so mobile login behaves the same.
+    final normalizedEmail = email.trim().toLowerCase();
     final res = await _sb.rpc('hrms_login', params: {
-      'p_email': email,
+      'p_email': normalizedEmail,
       'p_password': password,
     });
     // Supabase rpc returns dynamic; our function returns TABLE so it’s a list.
@@ -162,8 +169,9 @@ class RpcService {
   }
 
   Future<Map<String, dynamic>> signup(String email, String password, {String? name}) async {
+    final normalizedEmail = email.trim().toLowerCase();
     final res = await _sb.rpc('hrms_signup', params: {
-      'p_email': email,
+      'p_email': normalizedEmail,
       'p_password': password,
       'p_name': name,
     });
@@ -195,6 +203,20 @@ class RpcService {
   Future<List<Map<String, dynamic>>> holidaysList(String companyId) async {
     final res = await _sb.rpc('hrms_holidays_list', params: {'p_company_id': companyId});
     return (res as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Pending + approved leave rows for overlap checks; includes `employeeDivisionId` for holiday scoping.
+  Future<Map<String, dynamic>> leaveOverlapContext({
+    required String companyId,
+    required String actorUserId,
+    required String targetUserId,
+  }) async {
+    final res = await _sb.rpc('hrms_leave_overlap_context', params: {
+      'p_company_id': companyId,
+      'p_actor_user_id': actorUserId,
+      'p_target_user_id': targetUserId,
+    });
+    return parseOverlapRpc(res);
   }
 
   Future<String> holidaysCreate({
@@ -279,6 +301,56 @@ class RpcService {
     return Map<String, dynamic>.from(res as Map);
   }
 
+  /// Managerial only (`hr`, `admin`, `super_admin`). Returns `{ masters: [...] }` aligned with web payroll master GET.
+  Future<Map<String, dynamic>> payrollMasterList({required String actorUserId}) async {
+    final res = await _sb.rpc('hrms_payroll_master_list', params: {'p_actor_user_id': actorUserId});
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  Future<void> payrollMasterSaveBank({
+    required String actorUserId,
+    required String targetUserId,
+    required String bankName,
+    required String bankAccountHolderName,
+    required String bankAccountNumber,
+    required String bankIfsc,
+  }) async {
+    await _sb.rpc('hrms_payroll_master_save_bank', params: {
+      'p_actor_user_id': actorUserId,
+      'p_target_user_id': targetUserId,
+      'p_bank_name': bankName,
+      'p_bank_account_holder_name': bankAccountHolderName,
+      'p_bank_account_number': bankAccountNumber,
+      'p_bank_ifsc': bankIfsc,
+    });
+  }
+
+  Future<void> payrollMasterSavePrivate({
+    required String actorUserId,
+    required String targetUserId,
+    required Map<String, dynamic> payload,
+  }) async {
+    await _sb.rpc('hrms_payroll_master_save_private', params: {
+      'p_actor_user_id': actorUserId,
+      'p_target_user_id': targetUserId,
+      'p_payload': payload,
+    });
+  }
+
+  /// Managerial only. Returns `{ period, payslips, company, privatePayrollConfig }` for the calendar month.
+  Future<Map<String, dynamic>> payrollPeriodSnapshot({
+    required String actorUserId,
+    required int year,
+    required int month,
+  }) async {
+    final res = await _sb.rpc('hrms_payroll_period_snapshot', params: {
+      'p_actor_user_id': actorUserId,
+      'p_year': year,
+      'p_month': month,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   Future<List<Map<String, dynamic>>> leaveTypesList(String companyId) async {
     final res = await _sb.rpc('hrms_leave_types_list', params: {'p_company_id': companyId});
     return (res as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -323,6 +395,7 @@ class RpcService {
     required String endDateYmd,
     required num totalDays,
     String? reason,
+    bool isHalfDay = false,
   }) async {
     final res = await _sb.rpc('hrms_leave_request_create', params: {
       'p_company_id': companyId,
@@ -333,8 +406,11 @@ class RpcService {
       'p_end_date': endDateYmd,
       'p_total_days': totalDays,
       'p_reason': reason,
+      'p_is_half_day': isHalfDay,
     });
-    return res.toString();
+    final id = res.toString();
+    unawaited(TransactionNotifyService.leaveRequestCreated(id));
+    return id;
   }
 
   Future<bool> leaveRequestCancel({
@@ -364,7 +440,11 @@ class RpcService {
       'p_decision': decision,
       'p_rejection_reason': rejectionReason,
     });
-    return res == true;
+    final ok = res == true;
+    if (ok) {
+      unawaited(TransactionNotifyService.leaveRequestDecided(requestId));
+    }
+    return ok;
   }
 
   Future<List<Map<String, dynamic>>> reimbursementsList({
@@ -400,7 +480,9 @@ class RpcService {
       'p_description': description,
       'p_attachment_url': attachmentUrl,
     });
-    return res.toString();
+    final id = res.toString();
+    unawaited(TransactionNotifyService.reimbursementCreated(id));
+    return id;
   }
 
   Future<bool> reimbursementDecide({
@@ -417,7 +499,11 @@ class RpcService {
       'p_status': status,
       'p_rejection_reason': rejectionReason,
     });
-    return res == true;
+    final ok = res == true;
+    if (ok && (status == 'approved' || status == 'rejected')) {
+      unawaited(TransactionNotifyService.reimbursementDecided(reimbursementId));
+    }
+    return ok;
   }
 
   Future<Map<String, dynamic>> attendanceGet(String userId) async {
@@ -433,11 +519,19 @@ class RpcService {
   }
 
   /// Web-parity: today's attendance + log (shift timezone / night-shift work_date).
-  /// Returns `{hasEmployee, has_employee, workDate, timeZone, log}`.
+  /// Merges gross/active/idle/agent-session math like web `/api/attendance/me` and includes `agent` heartbeat.
+  /// Returns `{hasEmployee, has_employee, workDate, timeZone, log, agent}`.
   Future<Map<String, dynamic>> attendanceTodayWebParity(String userId) async {
     final gate = await _attendanceEmployeeGate(userId);
     if (!gate.ok) {
-      return {'hasEmployee': false, 'has_employee': false, 'workDate': null, 'timeZone': null, 'log': null};
+      return {
+        'hasEmployee': false,
+        'has_employee': false,
+        'workDate': null,
+        'timeZone': null,
+        'log': null,
+        'agent': null,
+      };
     }
     final wd = await _computeAttendanceWorkDate(gate.companyId, gate.employeeId);
     final log = await _sb
@@ -445,12 +539,67 @@ class RpcService {
         .select(
           'id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, '
           'lunch_break_started_at, tea_break_started_at, lunch_check_out_at, lunch_check_in_at, tea_check_out_at, tea_check_in_at, '
-          'lunch_break_segments, tea_break_segments, status, in_office, office_note, notes, check_in_in_office',
+          'lunch_break_segments, tea_break_segments, status, in_office, office_note, notes, check_in_in_office, '
+          'agent_active_minutes, agent_idle_minutes, agent_disconnected_minutes, activity_purged_at',
         )
         .eq('company_id', gate.companyId)
         .eq('employee_id', gate.employeeId)
         .eq('work_date', wd)
         .maybeSingle();
+
+    Map<String, dynamic>? mergedLog;
+    if (log != null) {
+      final logMap = Map<String, dynamic>.from(log);
+      final logId = logMap['id']?.toString();
+      var sessions = <Map<String, dynamic>>[];
+        if (logId != null && logId.isNotEmpty) {
+        final sess = await _sb
+            .from('HRMS_activity_sessions')
+            .select(
+              'attendance_log_id, started_at, ended_at, last_heartbeat_at, active_seconds, idle_seconds, disconnected_seconds',
+            )
+            .eq('company_id', gate.companyId)
+            .eq('employee_id', gate.employeeId)
+            .eq('attendance_log_id', logId);
+        final list = sess as List<dynamic>?;
+        if (list != null) {
+          sessions = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+      mergedLog = mergeWebDashboardMetrics(
+        log: logMap,
+        sessions: sessions,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+      );
+    }
+
+    final hb = await _sb
+        .from('HRMS_agent_heartbeat')
+        .select('status, last_seen_at, app_version, device_name')
+        .eq('company_id', gate.companyId)
+        .eq('employee_id', gate.employeeId)
+        .maybeSingle();
+
+    Map<String, dynamic>? agentPayload;
+    if (hb != null) {
+      final last = hb['last_seen_at']?.toString();
+      final lastMs = last != null ? DateTime.tryParse(last)?.millisecondsSinceEpoch : null;
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final connected = lastMs != null && nowMs - lastMs <= 60000;
+      agentPayload = {
+        'connected': connected,
+        'lastSeenAt': last,
+        'appVersion': hb['app_version'],
+        'deviceName': hb['device_name'],
+      };
+    } else {
+      agentPayload = {
+        'connected': false,
+        'lastSeenAt': null,
+        'appVersion': null,
+        'deviceName': null,
+      };
+    }
 
     final ctx = await getAttendanceContextForUser(sb: _sb, companyId: gate.companyId, attendanceEmployeeId: gate.employeeId);
     return {
@@ -458,7 +607,8 @@ class RpcService {
       'has_employee': true,
       'workDate': wd,
       'timeZone': ctx.timeZone,
-      'log': log == null ? null : Map<String, dynamic>.from(log),
+      'log': mergedLog,
+      'agent': agentPayload,
     };
   }
 

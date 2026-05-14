@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../app_config.dart';
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
@@ -28,7 +30,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool attendanceLoading = true;
   bool punching = false;
   Timer? _timer;
-  int tick = DateTime.now().millisecondsSinceEpoch;
+  Timer? _pollTimer;
+  /// Live clock for attendance only — updated every second **without** rebuilding payslip/holidays [FutureBuilder]s.
+  final ValueNotifier<int> _clockTick = ValueNotifier(DateTime.now().millisecondsSinceEpoch);
+
+  Future<Map<String, dynamic>>? _payslipsFuture;
+  Future<List<Map<String, dynamic>>>? _holidaysFuture;
 
   List<Map<String, dynamic>>? _leaveBalances;
   bool _leaveBalancesLoading = true;
@@ -61,8 +68,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _primePayslipAndHolidayFutures();
     _refreshAttendance();
     _refreshLeaveBalances();
+  }
+
+  void _primePayslipAndHolidayFutures() {
+    final u = widget.app.user;
+    final cid = u?.companyId;
+    if (u == null || cid == null || cid.isEmpty) {
+      _payslipsFuture = null;
+      _holidaysFuture = null;
+    } else {
+      _payslipsFuture = rpc.payslipsMe(userId: u.id, companyId: cid);
+      _holidaysFuture = rpc.holidaysList(cid);
+    }
   }
 
   Future<void> _refreshLeaveBalances() async {
@@ -107,7 +127,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _pollTimer?.cancel();
+    _clockTick.dispose();
     super.dispose();
+  }
+
+  void _ensurePoll(bool punchedInOpen) {
+    if (!punchedInOpen) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      return;
+    }
+    _pollTimer ??= Timer.periodic(const Duration(seconds: 20), (_) {
+      if (mounted) unawaited(_refreshAttendance(silent: true));
+    });
   }
 
   void _ensureTimer(bool shouldRun) {
@@ -117,22 +150,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
     _timer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => tick = DateTime.now().millisecondsSinceEpoch);
+      _clockTick.value = DateTime.now().millisecondsSinceEpoch;
     });
   }
 
-  Future<void> _refreshAttendance() async {
+  Future<void> _refreshAttendance({bool silent = false}) async {
     final u = widget.app.user;
     if (u == null) return;
-    setState(() => attendanceLoading = true);
+    if (!silent && mounted) setState(() => attendanceLoading = true);
     try {
       final data = await rpc.attendanceTodayWebParity(u.id);
-      setState(() => attendance = data);
-      final log = (data['log'] as Map?)?.cast<String, dynamic>();
-      final punchedIn = log != null && log['check_in_at'] != null && log['check_out_at'] == null;
-      _ensureTimer(punchedIn);
+      if (!mounted) return;
+      setState(() {
+        attendance = data;
+        final log = (data['log'] as Map?)?.cast<String, dynamic>();
+        final punchedIn = log != null && log['check_in_at'] != null && log['check_out_at'] == null;
+        _ensureTimer(punchedIn);
+        _ensurePoll(punchedIn);
+      });
     } finally {
-      if (mounted) setState(() => attendanceLoading = false);
+      if (!silent && mounted) setState(() => attendanceLoading = false);
     }
   }
 
@@ -159,6 +196,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  /// Same titles/messages as web `DashboardContent` confirm dialogs.
+  Future<bool> _confirmAttendanceAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final r = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(confirmLabel)),
+        ],
+      ),
+    );
+    return r == true;
+  }
+
+  Future<void> _confirmAndPunch(String action) async {
+    final ok = await _confirmAttendanceAction(
+      title: action == 'in' ? 'Punch in now?' : 'Final punch out now?',
+      message: action == 'in'
+          ? 'This will start your workday timer.'
+          : "This will complete today's attendance.",
+      confirmLabel: action == 'in' ? 'Punch in' : 'Punch out',
+    );
+    if (!ok || !mounted) return;
+    await _punch(action);
+  }
+
+  Future<void> _confirmAndBreakToggle(String kind, bool running) async {
+    final isLunch = kind == 'lunch';
+    final title = isLunch
+        ? (running ? 'End lunch break?' : 'Start lunch break?')
+        : (running ? 'End tea break?' : 'Start tea break?');
+    final message = isLunch
+        ? (running ? 'This will mark Lunch In now.' : 'This will mark Lunch Out now.')
+        : (running ? 'This will end tea break now.' : 'This will start tea break now.');
+    final ok = await _confirmAttendanceAction(
+      title: title,
+      message: message,
+      confirmLabel: 'Confirm',
+    );
+    if (!ok || !mounted) return;
+    await _breakToggle(kind);
+  }
+
+  Future<void> _openAgentDownload() async {
+    final raw = AppConfig.agentDownloadUrl.trim();
+    if (raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.hasScheme || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      _snack('Invalid download link in config.', err: true);
+      return;
+    }
+    if (!await canLaunchUrl(uri)) {
+      _snack('Could not open download link.', err: true);
+      return;
+    }
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
   String _formatTimeIST(dynamic iso) {
     if (iso == null) return '—';
     final dt = _tryParseDate(iso);
@@ -177,6 +278,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final s = x % 60;
     if (h > 0) return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  /// Whole minutes as "Xh Ym" — matches web dashboard / attendance page.
+  String _fmtHoursMin(num? min) {
+    if (min == null) return '—';
+    if (min is double && !min.isFinite) return '—';
+    final total = min.round().clamp(0, 1 << 30);
+    final h = total ~/ 60;
+    final m = total % 60;
+    return '${h}h ${m}m';
   }
 
   Future<void> _punch(String action) async {
@@ -236,18 +347,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return '${dt.day.toString().padLeft(2, '0')} - $m - ${dt.year}';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final app = widget.app;
-    final u = app.user;
-    final name = u?.name?.trim().isNotEmpty == true ? u!.name!.trim() : 'Employee';
-    final email = u?.email ?? '';
-    final companyId = u?.companyId ?? '';
+  Widget _buildAttendanceSection(BuildContext context, int tick) {
     final hasEmployee = (attendance?['has_employee'] == true) || (attendance?['hasEmployee'] == true);
     final rawLog = (attendance?['log'] is Map) ? attendance!['log'] : attendance;
     final log = (rawLog is Map) ? rawLog.cast<String, dynamic>() : <String, dynamic>{};
 
     final punchedIn = log['check_in_at'] != null && log['check_out_at'] == null;
+    final dayComplete = log['check_in_at'] != null && log['check_out_at'] != null;
     final lunchRunning = punchedIn && log['lunch_break_started_at'] != null;
     final teaRunning = punchedIn && log['tea_break_started_at'] != null;
     final punchInMs = punchedIn ? _tryParseDate(log['check_in_at'])?.millisecondsSinceEpoch ?? 0 : 0;
@@ -259,6 +365,237 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final lunchTotalMs = lunchSince != null ? lunchBaseMs + (tick - lunchSince).clamp(0, 1 << 30) : lunchBaseMs;
     final teaTotalMs = teaSince != null ? teaBaseMs + (tick - teaSince).clamp(0, 1 << 30) : teaBaseMs;
     final activeMs = punchedIn ? (elapsedMs - lunchTotalMs - teaTotalMs).clamp(0, 1 << 30) : 0;
+
+    final agent = (attendance?['agent'] is Map) ? (attendance!['agent'] as Map).cast<String, dynamic>() : <String, dynamic>{};
+    final agentConnected = agent['connected'] == true;
+
+    final grossMinApi = log['grossMinutes'] != null ? (log['grossMinutes'] as num).round() : null;
+    final elapsedMinFallback =
+        punchedIn && punchInMs > 0 ? ((tick - punchInMs) / 60000).floor().clamp(0, 1 << 30) : 0;
+    final grossMin = grossMinApi ?? elapsedMinFallback;
+
+    final rawActiveMin = log['activeMinutes'] != null
+        ? (log['activeMinutes'] as num).round()
+        : (punchedIn ? (activeMs / 60000).floor() : 0);
+    final activeMin = rawActiveMin > grossMin ? grossMin : rawActiveMin;
+    final activeMeetsPresent = activeMin >= 8 * 60;
+
+    return HrmsCard(
+      title: 'Attendance',
+      subtitle: 'Punch sequence: first in → lunch out → lunch in → final out (IST).',
+      trailing: const Icon(Icons.fingerprint, color: HrmsTokens.primary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (attendanceLoading)
+            Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
+          else if (!hasEmployee)
+            Text('No employee record linked to this user.', style: Theme.of(context).textTheme.bodySmall)
+          else ...[
+            Text(
+              dayComplete
+                  ? 'Attendance complete for today · In ${_formatTimeIST(log['check_in_at'])} · Out ${_formatTimeIST(log['check_out_at'])}'
+                  : punchedIn
+                      ? 'Punched in at ${_formatTimeIST(log['check_in_at'])}'
+                      : 'Not punched in',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: HrmsTokens.s2),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: agentConnected ? const Color(0xFFF0F9FF) : const Color(0xFFFFFBEB),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: agentConnected ? const Color(0xFFBAE6FD) : const Color(0xFFFDE68A),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'HRMS Agent',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: agentConnected ? const Color(0xFFE0F2FE) : const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          agentConnected ? 'Connected' : 'Disconnected',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: agentConnected ? const Color(0xFF0369A1) : const Color(0xFFB45309),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  if (agentConnected)
+                    Text(
+                      'Last seen ${_formatTimeIST(agent['lastSeenAt'])}'
+                      '${agent['deviceName'] != null ? ' · ${agent['deviceName']}' : ''}'
+                      '${agent['appVersion'] != null ? ' · v${agent['appVersion']}' : ''}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black87),
+                    )
+                  else ...[
+                    Text(
+                      'HRMS Agent is not connected. Please open HRMS Attendance Agent on your system.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black87),
+                    ),
+                    if (AppConfig.agentDownloadUrl.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFD97706),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                          onPressed: _openAgentDownload,
+                          child: const Text('Download Agent'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+            if (punchedIn) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFD1FAE5)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Time on premises (since first in)',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: const Color(0xFF065F46),
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _fmtHoursMin(grossMin),
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                            color: const Color(0xFF064E3B),
+                          ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Active work',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: const Color(0xFF065F46),
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _fmtHoursMin(activeMin),
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                            color: const Color(0xFF064E3B),
+                          ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      activeMeetsPresent ? '≥ 8h active — present for payroll' : 'Need 8h active work for payroll present',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: activeMeetsPresent ? const Color(0xFF047857) : const Color(0xFF6B7280),
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Live clock: ${_formatDurationMs(elapsedMs)}',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.black45),
+              ),
+            ],
+            const SizedBox(height: HrmsTokens.s3),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: punching || !hasEmployee || punchedIn || dayComplete ? null : () => _confirmAndPunch('in'),
+                    icon: const Icon(Icons.login),
+                    label: const Text('Punch in'),
+                  ),
+                ),
+                const SizedBox(width: HrmsTokens.s3),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: punching || !punchedIn ? null : () => _confirmAndPunch('out'),
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Punch out'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: HrmsTokens.s3),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: punching || !punchedIn ? null : () => _confirmAndBreakToggle('lunch', lunchRunning),
+                    child: Text(
+                      lunchRunning
+                          ? 'End lunch (${_formatDurationMs(lunchTotalMs)})'
+                          : 'Lunch (${_formatDurationMs(lunchTotalMs)})',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: HrmsTokens.s3),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: punching || !punchedIn ? null : () => _confirmAndBreakToggle('tea', teaRunning),
+                    child: Text(
+                      teaRunning
+                          ? 'End tea (${_formatDurationMs(teaTotalMs)})'
+                          : 'Tea (${_formatDurationMs(teaTotalMs)})',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    final u = app.user;
+    final name = u?.name?.trim().isNotEmpty == true ? u!.name!.trim() : 'Employee';
+    final email = u?.email ?? '';
+    final companyId = u?.companyId ?? '';
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dashboard'),
@@ -277,6 +614,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       drawer: AppDrawer(app: app),
       body: RefreshIndicator(
         onRefresh: () async {
+          if (mounted) {
+            setState(_primePayslipAndHolidayFutures);
+          }
           await Future.wait([_refreshAttendance(), _refreshLeaveBalances()]);
         },
         child: Padding(
@@ -322,88 +662,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Attendance
-            HrmsCard(
-              title: 'Attendance',
-              subtitle: 'Punch sequence: first in → lunch out → lunch in → final out (IST).',
-              trailing: const Icon(Icons.fingerprint, color: HrmsTokens.primary),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (attendanceLoading)
-                    Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
-                  else if (!hasEmployee)
-                    Text('No employee record linked to this user.', style: Theme.of(context).textTheme.bodySmall)
-                  else ...[
-                    Text(
-                      punchedIn ? 'Punched in at ${_formatTimeIST(log['check_in_at'])}' : 'Not punched in',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: HrmsTokens.s2),
-                    if (punchedIn)
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _formatDurationMs(elapsedMs),
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 20, fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Active: ${_formatDurationMs(activeMs)}',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54),
-                          ),
-                        ],
-                      ),
-                    const SizedBox(height: HrmsTokens.s3),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: punching || !hasEmployee || punchedIn ? null : () => _punch('in'),
-                            icon: const Icon(Icons.login),
-                            label: const Text('Punch in'),
-                          ),
-                        ),
-                        const SizedBox(width: HrmsTokens.s3),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: punching || !punchedIn ? null : () => _punch('out'),
-                            icon: const Icon(Icons.logout),
-                            label: const Text('Punch out'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: HrmsTokens.s3),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: punching || !punchedIn ? null : () => _breakToggle('lunch'),
-                            child: Text(
-                              lunchRunning
-                                  ? 'End lunch (${_formatDurationMs(lunchTotalMs)})'
-                                  : 'Lunch (${_formatDurationMs(lunchTotalMs)})',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: HrmsTokens.s3),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: punching || !punchedIn ? null : () => _breakToggle('tea'),
-                            child: Text(
-                              teaRunning
-                                  ? 'End tea (${_formatDurationMs(teaTotalMs)})'
-                                  : 'Tea (${_formatDurationMs(teaTotalMs)})',
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
+            ValueListenableBuilder<int>(
+              valueListenable: _clockTick,
+              builder: (context, tick, _) {
+                return _buildAttendanceSection(context, tick);
+              },
             ),
 
             // Leave balances (same policy math as web /api/leave/balance)
@@ -427,7 +690,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         style: Theme.of(context).textTheme.bodySmall,
                       )
                     else ...[
-                      for (final row in _leaveBalances!)
+                      for (final row in _leaveBalances!.take(3))
                         Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: _LeaveBalanceRow(
@@ -462,9 +725,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                     if (companyId.isEmpty || u == null)
                       const Text('No company assigned.')
+                    else if (_payslipsFuture == null)
+                      Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
                     else
                       FutureBuilder<Map<String, dynamic>>(
-                        future: RpcService().payslipsMe(userId: u.id, companyId: u.companyId),
+                        future: _payslipsFuture,
                         builder: (context, snap) {
                           if (snap.connectionState != ConnectionState.done) {
                             return Text('Loading…', style: Theme.of(context).textTheme.bodySmall);
@@ -512,9 +777,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     const SizedBox(height: 10),
                     if (companyId.isEmpty)
                       const Text('No company assigned.')
+                    else if (_holidaysFuture == null)
+                      const Text('Loading…')
                     else
-                      FutureBuilder(
-                        future: RpcService().holidaysList(companyId),
+                      FutureBuilder<List<Map<String, dynamic>>>(
+                        future: _holidaysFuture,
                         builder: (context, snap) {
                           if (snap.connectionState != ConnectionState.done) {
                             return const Text('Loading…');

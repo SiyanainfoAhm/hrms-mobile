@@ -27,75 +27,85 @@ Future<void> main() async {
   ensureAttendanceTimeZonesInitialized();
   await RuntimeConfig.instance.load();
   await SupabaseApp.init();
-  runApp(const HrmsApp());
+  final rpc = RpcService();
+  final app = AppState(rpc);
+  await app.init();
+  runApp(HrmsApp(app: app));
 }
 
 class HrmsApp extends StatefulWidget {
-  const HrmsApp({super.key});
+  const HrmsApp({super.key, required this.app});
+
+  final AppState app;
 
   @override
   State<HrmsApp> createState() => _HrmsAppState();
 }
 
 class _HrmsAppState extends State<HrmsApp> {
-  late final AppState app = AppState(RpcService())..init();
+  late final GoRouter _router;
 
-  late final GoRouter _router = GoRouter(
-    initialLocation: '/login',
-    refreshListenable: app,
-    redirect: (context, state) {
-      if (app.loading) return null;
-      final loggedIn = app.user != null;
-      final isAuthRoute = state.matchedLocation == '/login' || state.matchedLocation == '/signup';
-      if (!loggedIn && !isAuthRoute) return '/login';
-      if (loggedIn && isAuthRoute) return '/dashboard';
-      return null;
-    },
-    routes: [
-      GoRoute(path: '/login', builder: (c, s) => LoginScreen(app: app)),
-      GoRoute(path: '/signup', builder: (c, s) => SignupScreen(app: app)),
-      GoRoute(
-        path: '/dashboard',
-        builder: (context, state) => DashboardScreen(app: app),
-      ),
-      GoRoute(
-        path: '/attendance',
-        builder: (c, s) => AttendanceScreen(app: app),
-      ),
-      GoRoute(
-        path: '/employees',
-        builder: (c, s) => EmployeesScreen(app: app),
-        redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
-      ),
-      GoRoute(
-        path: '/employees/invite/:userId',
-        builder: (c, s) => EmployeeInviteScreen(
-          app: app,
-          targetUserId: s.pathParameters['userId'] ?? '',
+  @override
+  void initState() {
+    super.initState();
+    final app = widget.app;
+    _router = GoRouter(
+      initialLocation: app.user != null ? '/dashboard' : '/login',
+      refreshListenable: app,
+      redirect: (context, state) {
+        if (app.loading) return null;
+        final loggedIn = app.user != null;
+        final isAuthRoute = state.matchedLocation == '/login' || state.matchedLocation == '/signup';
+        if (!loggedIn && !isAuthRoute) return '/login';
+        if (loggedIn && isAuthRoute) return '/dashboard';
+        return null;
+      },
+      routes: [
+        GoRoute(path: '/login', builder: (c, s) => LoginScreen(app: app)),
+        GoRoute(path: '/signup', builder: (c, s) => SignupScreen(app: app)),
+        GoRoute(
+          path: '/dashboard',
+          builder: (context, state) => DashboardScreen(app: app),
         ),
-        redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
-      ),
-      GoRoute(path: '/holidays', builder: (c, s) => HolidaysScreen(app: app)),
-      GoRoute(path: '/leave', builder: (c, s) => LeaveScreen(app: app)),
-      GoRoute(path: '/reimbursements', builder: (c, s) => ReimbursementsScreen(app: app)),
-      GoRoute(path: '/profile', builder: (c, s) => ProfileScreen(app: app)),
-      GoRoute(path: '/profile/change-password', builder: (c, s) => ChangePasswordScreen(app: app)),
-      GoRoute(
-        path: '/payroll',
-        builder: (c, s) => PayrollScreen(app: app),
-        redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
-      ),
-      GoRoute(
-        path: '/settings',
-        builder: (c, s) => SettingsScreen(app: app),
-        redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
-      ),
-      GoRoute(
-        path: '/payslips',
-        builder: (c, s) => PayslipsScreen(app: app),
-      ),
-    ],
-  );
+        GoRoute(
+          path: '/attendance',
+          builder: (c, s) => AttendanceScreen(app: app),
+        ),
+        GoRoute(
+          path: '/employees',
+          builder: (c, s) => EmployeesScreen(app: app),
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+        ),
+        GoRoute(
+          path: '/employees/invite/:userId',
+          builder: (c, s) => EmployeeInviteScreen(
+            app: app,
+            targetUserId: s.pathParameters['userId'] ?? '',
+          ),
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+        ),
+        GoRoute(path: '/holidays', builder: (c, s) => HolidaysScreen(app: app)),
+        GoRoute(path: '/leave', builder: (c, s) => LeaveScreen(app: app)),
+        GoRoute(path: '/reimbursements', builder: (c, s) => ReimbursementsScreen(app: app)),
+        GoRoute(path: '/profile', builder: (c, s) => ProfileScreen(app: app)),
+        GoRoute(path: '/profile/change-password', builder: (c, s) => ChangePasswordScreen(app: app)),
+        GoRoute(
+          path: '/payroll',
+          builder: (c, s) => PayrollScreen(app: app),
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+        ),
+        GoRoute(
+          path: '/settings',
+          builder: (c, s) => SettingsScreen(app: app),
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+        ),
+        GoRoute(
+          path: '/payslips',
+          builder: (c, s) => PayslipsScreen(app: app),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {

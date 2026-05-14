@@ -1,5 +1,13 @@
 {
   "supabaseUrl": "https://fvveqziyusjgqejowkfp.supabase.co",
-  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2dmVxeml5dXNqZ3Flam93a2ZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTU5MzY5MDUsImV4cCI6MjAzMTUxMjkwNX0.71R7B0aqK7MvAppN-Bytj56VvKPeUFRGRyjKbZH0BBw"
+  "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2dmVxeml5dXNqZ3Flam93a2ZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTU5MzY5MDUsImV4cCI6MjAzMTUxMjkwNX0.71R7B0aqK7MvAppN-Bytj56VvKPeUFRGRyjKbZH0BBw",
+  "webAppInviteBaseUrl": "https://hrms-web-rage.vercel.app",
+  "inviteWebOnlyBaseUrl": "",
+  "transactionNotifyUrl": "https://hrms-web-rage.vercel.app/api/webhooks/hrms-transaction-notify",
+  "transactionNotifySecret": "",
+  "agentDownloadUrl": "https://fvveqziyusjgqejowkfp.supabase.co/storage/v1/object/public/photomedia/HRMS%20Attendance%20Agent_0.1.0_x64-setup.zip",
+  "powerAutomateEmailUrl": "https://default25ff3e19eb6b4343af6d1f96004e62.ab.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/de9310bc5434434eaf1fbe2ca63311b7/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=QnGVQKjLsxpN4Fh85Dju4nBMREyg_ZVkIWaF7M9sHTY",
+  "notifyHrEmail": "hr@siyanainfo.com",
+  "googleWebClientId": "136670156025-e4feolihh2ha2cruef3hje6cda3amlu7.apps.googleusercontent.com",
+  "googleIosClientId": ""
 }
-

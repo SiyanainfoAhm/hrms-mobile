@@ -7,7 +7,6 @@ import '../theme/tokens.dart';
 import '../ui/formatters.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/profile_documents_tab.dart';
-import '../widgets/profile_pay_tab.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, required this.app});
@@ -716,7 +715,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Profile'),
@@ -730,7 +729,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           bottom: const TabBar(
             tabs: [
               Tab(text: 'My Profile'),
-              Tab(text: 'My Pay'),
               Tab(text: 'Documents'),
             ],
           ),
@@ -739,7 +737,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         body: TabBarView(
           children: [
             _profileFormBody(),
-            ProfilePayTab(app: widget.app),
             ProfileDocumentsTab(app: widget.app),
           ],
         ),

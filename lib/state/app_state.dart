@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/google_web_sso.dart';
 import '../services/rpc_service.dart';
 
 class SessionUser {
@@ -69,6 +70,7 @@ class AppState extends ChangeNotifier {
   String _friendlyError(Object e) {
     if (e is PostgrestException) {
       final msg = e.message.trim();
+      if (_isAccountNotFoundMessage(msg)) return 'Account does not exist';
       if (msg.isNotEmpty) return msg;
       // Fallbacks by code are intentionally generic.
       if (e.code == '28000') return 'Invalid email or password.';
@@ -79,9 +81,27 @@ class AppState extends ChangeNotifier {
       if (msg.isNotEmpty) return msg;
       return 'Authentication failed. Please try again.';
     }
+    if (e is StateError) {
+      final msg = e.message.trim();
+      if (_isAccountNotFoundMessage(msg)) return 'Account does not exist';
+      if (msg.isNotEmpty) return msg;
+      return 'Something went wrong. Please try again.';
+    }
     final s = e.toString();
+    if (_isAccountNotFoundMessage(s)) return 'Account does not exist';
     if (s.contains('Invalid email or password')) return 'Invalid email or password.';
     return 'Something went wrong. Please try again.';
+  }
+
+  static bool _isAccountNotFoundMessage(String s) {
+    final t = s.toLowerCase();
+    return t.contains('account does not exist') || t.contains('no account found');
+  }
+
+  void clearError() {
+    if (error == null) return;
+    error = null;
+    notifyListeners();
   }
 
   Future<void> init() async {
@@ -92,7 +112,12 @@ class AppState extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kSessionKey);
       if (raw != null && raw.isNotEmpty) {
-        user = SessionUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final restored = SessionUser.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        if (restored.id.isNotEmpty) {
+          user = restored;
+        } else {
+          await prefs.remove(_kSessionKey);
+        }
       }
     } catch (e) {
       error = _friendlyError(e);
@@ -117,6 +142,7 @@ class AppState extends ChangeNotifier {
     try {
       final row = await _rpc.login(email, password);
       user = SessionUser.fromRpc(row);
+      error = null;
       await _persist();
       notifyListeners();
     } catch (e) {
@@ -130,12 +156,52 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Same backend path as hrms-web Google button: web `/api/auth/google`, then `hrms_me` for company fields.
+  Future<void> loginWithGoogle({required bool isSignup}) async {
+    error = null;
+    notifyListeners();
+    if (!GoogleWebSso.isConfigured) {
+      error =
+          'Google sign-in is not configured. Set webAppInviteBaseUrl and googleWebClientId in assets/config.json (same values as hrms-web).';
+      notifyListeners();
+      throw StateError(error!);
+    }
+    try {
+      final idToken = await GoogleWebSso.obtainIdToken();
+      if (idToken == null || idToken.isEmpty) {
+        return;
+      }
+      final session = await GoogleWebSso.postVerify(idToken: idToken, isSignup: isSignup);
+      final id = session['id']?.toString() ?? '';
+      if (id.isEmpty) {
+        throw StateError('Invalid account response.');
+      }
+      final me = await _rpc.me(id);
+      if (me == null) {
+        throw StateError('Could not load your profile.');
+      }
+      user = SessionUser.fromRpc(me);
+      error = null;
+      await _persist();
+      notifyListeners();
+    } catch (e) {
+      error = _friendlyError(e);
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('Google login error: $e');
+      }
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   Future<void> signup(String email, String password, {String? name}) async {
     error = null;
     notifyListeners();
     try {
       final row = await _rpc.signup(email, password, name: name);
       user = SessionUser.fromRpc(row);
+      error = null;
       await _persist();
       notifyListeners();
     } catch (e) {
@@ -150,6 +216,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    await GoogleWebSso.signOut();
     user = null;
     await _persist();
     notifyListeners();
