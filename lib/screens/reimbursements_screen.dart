@@ -12,7 +12,6 @@ import '../ui/empty_state.dart';
 import '../ui/formatters.dart';
 import '../ui/hrms_card.dart';
 import '../ui/status_chip.dart';
-import '../widgets/app_drawer.dart';
 
 class ReimbursementsScreen extends StatefulWidget {
   const ReimbursementsScreen({super.key, required this.app});
@@ -81,7 +80,6 @@ class _ReimbursementsScreenState extends State<ReimbursementsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Reimbursements')),
-      drawer: AppDrawer(app: widget.app),
       floatingActionButton: (companyId.isEmpty || userId.isEmpty)
           ? null
           : FloatingActionButton(

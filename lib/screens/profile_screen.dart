@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
 import '../ui/formatters.dart';
-import '../widgets/app_drawer.dart';
+import '../widgets/hrms_ui/app_card.dart';
+import '../widgets/hrms_ui/app_snackbar.dart';
+import '../widgets/hrms_ui/profile_menu_tile.dart';
+import '../widgets/hrms_ui/section_header.dart';
 import '../widgets/profile_documents_tab.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -360,6 +364,88 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  String _initialsFor(String name, String email) {
+    final n = name.trim();
+    if (n.isNotEmpty) {
+      final parts = n.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+      if (parts.length == 1) return parts[0].substring(0, 1).toUpperCase();
+      return (parts[0].substring(0, 1) + parts[1].substring(0, 1)).toUpperCase();
+    }
+    final local = email.split('@').first;
+    return local.isNotEmpty ? local.substring(0, 1).toUpperCase() : 'U';
+  }
+
+  Future<void> _confirmLogout(BuildContext context) async {
+    final ok = await showAppConfirmSheet(
+      context,
+      title: 'Sign out?',
+      message: 'You will need to sign in again to use HRMS.',
+      confirm: 'Log out',
+    );
+    if (ok == true && context.mounted) {
+      await widget.app.logout();
+      if (context.mounted) context.go('/login');
+    }
+  }
+
+  Widget _profileHero(BuildContext context, SessionUser u) {
+    final display = _name.text.trim().isNotEmpty ? _name.text.trim() : (u.name?.trim().isNotEmpty == true ? u.name!.trim() : u.email);
+    final mail = u.email;
+    final roleLabel = u.role.replaceAll('_', ' ');
+    final statusLabel = _employmentStatus.replaceAll('_', ' ');
+    return AppCard(
+      title: 'Your profile',
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 28,
+            backgroundColor: HrmsTokens.primarySoft,
+            foregroundColor: HrmsTokens.primary,
+            child: Text(_initialsFor(display, mail), style: GoogleFonts.inter(fontWeight: FontWeight.w900, fontSize: 18)),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(display, style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, color: HrmsTokens.text)),
+                const SizedBox(height: 4),
+                Text(mail, style: GoogleFonts.inter(fontSize: 13, color: HrmsTokens.muted)),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Chip(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      label: Text(
+                        roleLabel,
+                        style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: HrmsTokens.primary),
+                      ),
+                      backgroundColor: HrmsTokens.primarySoft,
+                      side: BorderSide.none,
+                    ),
+                    if (!_isSuper)
+                      Chip(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        label: Text(
+                          statusLabel,
+                          style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: HrmsTokens.text),
+                        ),
+                        backgroundColor: const Color(0xFFF1F5F9),
+                        side: BorderSide.none,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _profileFormBody() {
     final u = widget.app.user!;
     final auth = _str(_profile?['auth_provider'] == null ? u.authProvider : _profile!['auth_provider']);
@@ -388,16 +474,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
       children: [
         if (_err != null) Text('$_err', style: TextStyle(color: Theme.of(context).colorScheme.error)),
         if (_success != null) Text(_success!, style: TextStyle(color: Theme.of(context).colorScheme.primary)),
-        if (u.isManagerial) ...[
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.settings_outlined),
-            title: const Text('Organization settings'),
-            subtitle: const Text('Company, shifts, roles, org structure'),
-            onTap: () => context.go('/settings'),
+        if (_profile != null) _profileHero(context, u),
+        const SizedBox(height: 8),
+        const SectionHeader(title: 'More', subtitle: 'Holidays, reimbursements, and admin tools'),
+        ProfileMenuTile(
+          icon: Icons.celebration_outlined,
+          title: 'Holidays',
+          subtitle: 'Company calendar',
+          onTap: () => context.push('/holidays'),
+        ),
+        ProfileMenuTile(
+          icon: Icons.receipt_long_outlined,
+          title: 'Reimbursements',
+          subtitle: 'Submit and track claims',
+          onTap: () => context.push('/reimbursements'),
+        ),
+        if (u.isManagerial)
+          AdminPanelCard(
+            child: Column(
+              children: [
+                ProfileMenuTile(
+                  icon: Icons.groups_outlined,
+                  title: 'Employees',
+                  subtitle: 'Directory and records',
+                  onTap: () => context.push('/employees'),
+                ),
+                ProfileMenuTile(
+                  icon: Icons.payments_outlined,
+                  title: 'Payroll',
+                  subtitle: 'Runs and periods',
+                  onTap: () => context.push('/payroll'),
+                ),
+                ProfileMenuTile(
+                  icon: Icons.calendar_month_outlined,
+                  title: 'Company attendance',
+                  subtitle: 'Review punches by date',
+                  onTap: () => context.go('/attendance'),
+                ),
+                ProfileMenuTile(
+                  icon: Icons.settings_outlined,
+                  title: 'Settings',
+                  subtitle: 'Organization configuration',
+                  onTap: () => context.push('/settings'),
+                ),
+              ],
+            ),
           ),
-          const Divider(),
-        ],
+        ProfileMenuTile(
+          icon: Icons.logout,
+          title: 'Log out',
+          subtitle: 'Sign out of HRMS on this device',
+          onTap: () => _confirmLogout(context),
+          trailing: const SizedBox.shrink(),
+        ),
+        const Divider(height: 28),
         if (_isSuper) ...[
           Text(
             'You are the master admin. Manage companies from Settings; only basic account fields apply here.',
@@ -700,6 +830,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_isSuper) {
       return Scaffold(
         appBar: AppBar(
+          automaticallyImplyLeading: false,
           title: const Text('Profile'),
           actions: [
             if (!_loading && _profile != null)
@@ -709,7 +840,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
           ],
         ),
-        drawer: AppDrawer(app: widget.app),
         body: _profileFormBody(),
       );
     }
@@ -718,6 +848,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
+          automaticallyImplyLeading: false,
           title: const Text('Profile'),
           actions: [
             if (!_loading && _profile != null)
@@ -733,7 +864,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ),
-        drawer: AppDrawer(app: widget.app),
         body: TabBarView(
           children: [
             _profileFormBody(),

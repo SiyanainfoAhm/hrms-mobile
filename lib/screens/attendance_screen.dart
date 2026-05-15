@@ -6,7 +6,6 @@ import '../theme/tokens.dart';
 import '../ui/empty_state.dart';
 import '../ui/hrms_card.dart';
 import '../ui/formatters.dart';
-import '../widgets/app_drawer.dart';
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({super.key, required this.app});
@@ -166,6 +165,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: Text(isManagerial ? 'Company attendance' : 'My attendance'),
         actions: [
           IconButton(
@@ -175,7 +175,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           ),
         ],
       ),
-      drawer: AppDrawer(app: widget.app),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(

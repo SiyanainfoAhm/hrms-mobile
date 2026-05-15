@@ -5,15 +5,18 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../widgets/hrms_ui/quick_action_tile.dart';
+import '../widgets/hrms_ui/section_header.dart';
+
 import '../app_config.dart';
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
 import '../ui/formatters.dart';
 import '../ui/hrms_card.dart';
-import '../widgets/app_drawer.dart';
 
-const Color _kTeal = Color(0xFF0F766E);
+/// Matches web `DashboardContent`: only the **employee** role gets self punch-in/out on the dashboard.
+bool _isEmployeeDashboard(SessionUser? u) => u != null && u.role == 'employee';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.app});
@@ -69,8 +72,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _primePayslipAndHolidayFutures();
-    _refreshAttendance();
-    _refreshLeaveBalances();
+    if (_isEmployeeDashboard(widget.app.user)) {
+      _refreshAttendance();
+      _refreshLeaveBalances();
+    } else {
+      attendanceLoading = false;
+      _leaveBalancesLoading = false;
+    }
   }
 
   void _primePayslipAndHolidayFutures() {
@@ -589,237 +597,571 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  String _roleWorkflowLabel(String role) {
+    if (role.isEmpty) return 'User';
+    return role
+        .split('_')
+        .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+  }
+
+  List<Widget> _managerialNavGrid(BuildContext context, SessionUser u) {
+    final role = u.role;
+    final managerial = u.isManagerial;
+    final superA = u.isSuperAdmin;
+    final showAttendanceCard = managerial || role == 'manager';
+    final canCompanyAttendance = managerial;
+
+    final cards = <Widget>[
+      if (showAttendanceCard)
+        _ManagerialNavCard(
+          icon: Icons.event_available_outlined,
+          title: 'Attendance overview',
+          description:
+              'Employees punch: first in → lunch out → lunch in → final out. Review punches by date from the attendance workspace.',
+          primaryLabel: canCompanyAttendance ? 'Company attendance' : 'Open attendance',
+          onPrimary: () => context.go('/attendance'),
+          primaryFilled: canCompanyAttendance,
+        ),
+      _ManagerialNavCard(
+        icon: Icons.beach_access_outlined,
+        title: 'Leaves',
+        description: 'See leave balance and requests. HR and managers can review team or company leave.',
+        primaryLabel: 'Go to Leave',
+        onPrimary: () => context.go('/leave'),
+      ),
+      _ManagerialNavCard(
+        icon: Icons.payments_outlined,
+        title: 'Payroll & payslips',
+        description: managerial
+            ? 'View payslips and run payroll periods for your company.'
+            : 'View generated payslips for your payroll periods.',
+        primaryLabel: 'View payslips',
+        onPrimary: () => context.go('/payslips'),
+        secondaryLabel: managerial ? 'Payroll admin' : null,
+        onSecondary: managerial ? () => context.push('/payroll') : null,
+      ),
+      _ManagerialNavCard(
+        icon: Icons.celebration_outlined,
+        title: 'Holidays',
+        description: 'Company holiday calendar configured by Admin / HR.',
+        primaryLabel: 'View calendar',
+        onPrimary: () => context.push('/holidays'),
+        primaryFilled: false,
+      ),
+      if (managerial)
+        _ManagerialNavCard(
+          icon: Icons.groups_outlined,
+          title: 'Employee hub',
+          description: 'Search, view and manage employee records for the entire company.',
+          primaryLabel: 'Go to employees',
+          onPrimary: () => context.push('/employees'),
+        ),
+      if (superA)
+        _ManagerialNavCard(
+          icon: Icons.apartment_outlined,
+          title: 'Organization',
+          description: 'Company profile, branding and workspace settings.',
+          primaryLabel: 'Open settings',
+          onPrimary: () => context.push('/settings'),
+        ),
+    ];
+
+    return [
+      Text(
+        'You are viewing the ${_roleWorkflowLabel(role)} workflow.',
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: HrmsTokens.muted),
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final gap = HrmsTokens.s4;
+          final colW = w >= 560 ? (w - gap) / 2 : w;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: [
+              for (final c in cards)
+                SizedBox(
+                  width: colW,
+                  child: c,
+                ),
+            ],
+          );
+        },
+      ),
+    ];
+  }
+
+  List<Widget> _employeeDashboardList(BuildContext context, SessionUser u, String name, String email, String companyId) {
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: HrmsTokens.s4, vertical: HrmsTokens.s5),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              HrmsTokens.primary,
+              Color.lerp(HrmsTokens.primary, const Color(0xFF4C1D95), 0.35)!,
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: HrmsTokens.rLg(),
+          boxShadow: [HrmsTokens.shadowSm()],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.white.withValues(alpha: 0.2),
+              foregroundColor: Colors.white,
+              child: Text(_initials(u.name, email), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+            ),
+            const SizedBox(width: HrmsTokens.s4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _greeting(),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    name,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (email.isNotEmpty)
+                    Text(
+                      email,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.85)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Employee',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.3,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      const SectionHeader(title: 'Quick actions', subtitle: 'Shortcuts to common tasks'),
+      GridView.count(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        crossAxisCount: 2,
+        mainAxisSpacing: HrmsTokens.s3,
+        crossAxisSpacing: HrmsTokens.s3,
+        childAspectRatio: 1.12,
+        children: [
+          QuickActionTile(
+            icon: Icons.beach_access_outlined,
+            label: 'Apply leave',
+            onTap: () => context.go('/leave'),
+          ),
+          QuickActionTile(
+            icon: Icons.receipt_long_outlined,
+            label: 'Reimbursement',
+            onTap: () => context.push('/reimbursements'),
+          ),
+          QuickActionTile(
+            icon: Icons.payments_outlined,
+            label: 'Payslip',
+            onTap: () => context.go('/payslips'),
+          ),
+          QuickActionTile(
+            icon: Icons.calendar_month_outlined,
+            label: 'My attendance',
+            onTap: () => context.go('/attendance'),
+          ),
+        ],
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      const SectionHeader(title: 'Today', subtitle: 'Attendance and time on site'),
+      ValueListenableBuilder<int>(
+        valueListenable: _clockTick,
+        builder: (context, tick, _) {
+          return _buildAttendanceSection(context, tick);
+        },
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      HrmsCard(
+        title: 'Leave balances',
+        subtitle: 'Available days per leave policy (PL, SL, etc.)',
+        trailing: const Icon(Icons.beach_access_outlined, color: HrmsTokens.primary),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (companyId.isEmpty)
+              const Text('No company assigned.')
+            else if (_leaveBalancesLoading)
+              Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
+            else if (_leaveBalancesErr != null)
+              Text('Error: $_leaveBalancesErr', style: const TextStyle(color: HrmsTokens.danger))
+            else if ((_leaveBalances ?? const []).isEmpty)
+              Text(
+                'No leave policies configured. Ask HR to set up leave types and policies.',
+                style: Theme.of(context).textTheme.bodySmall,
+              )
+            else ...[
+              for (final row in _leaveBalances!.take(3))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _LeaveBalanceRow(
+                    name: (row['name'] ?? '').toString(),
+                    isPaid: row['is_paid'] == true,
+                    used: _fmtNum(row['used_days']),
+                    remaining: row['remaining_days'],
+                  ),
+                ),
+              const SizedBox(height: 4),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => context.go('/leave'),
+                  child: const Text('Go to Leave'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      HrmsCard(
+        title: 'Latest payslip',
+        subtitle: 'Your most recent payslip (if generated).',
+        trailing: const Icon(Icons.description_outlined, color: HrmsTokens.primary),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (companyId.isEmpty)
+              const Text('No company assigned.')
+            else if (_payslipsFuture == null)
+              Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
+            else
+              FutureBuilder<Map<String, dynamic>>(
+                future: _payslipsFuture,
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return Text('Loading…', style: Theme.of(context).textTheme.bodySmall);
+                  }
+                  if (snap.hasError) {
+                    return Text('Error: ${snap.error}', style: const TextStyle(color: HrmsTokens.danger));
+                  }
+                  final data = snap.data;
+                  final rows = (data?['payslips'] as List?) ?? const [];
+                  if (rows.isEmpty) return Text('No payslips found.', style: Theme.of(context).textTheme.bodySmall);
+                  final p = Map<String, dynamic>.from(rows.first as Map);
+                  final dateLabel = _formatIndianDate(p['generated_at']);
+                  final net = num.tryParse((p['net_pay'] ?? '').toString());
+                  final netLabel = net != null ? UiFormatters.inr(net) : (p['net_pay'] ?? '—').toString();
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Generated', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: HrmsTokens.muted)),
+                          Text(dateLabel, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      Text(
+                        'Net: $netLabel',
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+      HrmsCard(
+        title: 'Upcoming holidays',
+        subtitle: 'Next dates on your company calendar.',
+        trailing: const Icon(Icons.celebration_outlined, color: HrmsTokens.primary),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (companyId.isEmpty)
+              const Text('No company assigned.')
+            else if (_holidaysFuture == null)
+              Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
+            else
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _holidaysFuture,
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return Text('Loading…', style: Theme.of(context).textTheme.bodySmall);
+                  }
+                  if (snap.hasError) {
+                    return Text('Error: ${snap.error}', style: const TextStyle(color: HrmsTokens.danger));
+                  }
+                  final today = DateTime.now();
+                  final rows = (snap.data ?? const <Map<String, dynamic>>[])
+                      .where((h) {
+                        final d = _tryParseDate(h['holiday_end_date'] ?? h['holiday_date']);
+                        if (d == null) return false;
+                        return !d.isBefore(DateTime(today.year, today.month, today.day));
+                      })
+                      .toList()
+                    ..sort((a, b) => (a['holiday_date'] ?? '').toString().compareTo((b['holiday_date'] ?? '').toString()));
+
+                  final top = rows.take(5).toList();
+                  if (top.isEmpty) {
+                    return Text('No upcoming holidays.', style: Theme.of(context).textTheme.bodySmall);
+                  }
+                  return Column(
+                    children: [
+                      for (final h in top)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  (h['name'] ?? '').toString(),
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              Text(
+                                _formatIndianDate(h['holiday_date']),
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: HrmsTokens.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () => context.push('/holidays'),
+                          child: const Text('View all'),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _managerialHeaderBanner(BuildContext context, String name, String email, String role) {
+    return [
+      Material(
+        color: HrmsTokens.surface,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: HrmsTokens.rLg(),
+          side: const BorderSide(color: HrmsTokens.border),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(HrmsTokens.s4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 26,
+                backgroundColor: HrmsTokens.primarySoft,
+                foregroundColor: HrmsTokens.primary,
+                child: Text(
+                  _initials(name == 'User' ? null : name, email),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(width: HrmsTokens.s4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _greeting(),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: HrmsTokens.muted),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      name,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800, color: HrmsTokens.text),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (email.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(email, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: HrmsTokens.muted)),
+                    ],
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: HrmsTokens.primarySoft,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        _roleWorkflowLabel(role),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: HrmsTokens.primary,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: HrmsTokens.s4),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = widget.app;
     final u = app.user;
-    final name = u?.name?.trim().isNotEmpty == true ? u!.name!.trim() : 'Employee';
+    final name = u?.name?.trim().isNotEmpty == true ? u!.name!.trim() : 'User';
     final email = u?.email ?? '';
-    final companyId = u?.companyId ?? '';
+    final isEmployee = _isEmployeeDashboard(u);
+
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const Text('Dashboard'),
         actions: [
           IconButton(
             onPressed: () async {
               await app.logout();
               if (!context.mounted) return;
-              // go_router redirect will handle the rest
             },
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
           )
         ],
       ),
-      drawer: AppDrawer(app: app),
       body: RefreshIndicator(
         onRefresh: () async {
-          if (mounted) {
-            setState(_primePayslipAndHolidayFutures);
+          if (mounted) setState(_primePayslipAndHolidayFutures);
+          if (!mounted) return;
+          if (isEmployee) {
+            await Future.wait([_refreshAttendance(), _refreshLeaveBalances()]);
           }
-          await Future.wait([_refreshAttendance(), _refreshLeaveBalances()]);
         },
         child: Padding(
           padding: const EdgeInsets.all(HrmsTokens.s4),
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: HrmsTokens.primary,
-                  foregroundColor: Colors.white,
-                  child: Text(_initials(u?.name, email)),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${_greeting()},',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.black54),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        name,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (email.isNotEmpty)
-                        Text(
-                          email,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black45),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                    ],
-                  ),
-                ),
+              if (u != null && isEmployee) ..._employeeDashboardList(context, u, name, email, u.companyId ?? ''),
+              if (u != null && !isEmployee) ...[
+                ..._managerialHeaderBanner(context, name, email, u.role),
+                ..._managerialNavGrid(context, u),
               ],
-            ),
-            const SizedBox(height: 16),
-
-            ValueListenableBuilder<int>(
-              valueListenable: _clockTick,
-              builder: (context, tick, _) {
-                return _buildAttendanceSection(context, tick);
-              },
-            ),
-
-            // Leave balances (same policy math as web /api/leave/balance)
-            const SizedBox(height: HrmsTokens.s4),
-            HrmsCard(
-              title: 'Leave balances',
-              subtitle: 'Available days per leave policy (PL, SL, etc.)',
-              trailing: const Icon(Icons.beach_access_outlined, color: HrmsTokens.primary),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                    if (companyId.isEmpty || u == null)
-                      const Text('No company assigned.')
-                    else if (_leaveBalancesLoading)
-                      Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
-                    else if (_leaveBalancesErr != null)
-                      Text('Error: $_leaveBalancesErr', style: const TextStyle(color: HrmsTokens.danger))
-                    else if ((_leaveBalances ?? const []).isEmpty)
-                      Text(
-                        'No leave policies configured. Ask HR to set up leave types and policies.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      )
-                    else ...[
-                      for (final row in _leaveBalances!.take(3))
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: _LeaveBalanceRow(
-                            name: (row['name'] ?? '').toString(),
-                            isPaid: row['is_paid'] == true,
-                            used: _fmtNum(row['used_days']),
-                            remaining: row['remaining_days'],
-                          ),
-                        ),
-                      const SizedBox(height: 4),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () => context.push('/leave'),
-                          child: const Text('Go to Leave'),
-                        ),
-                      ),
-                    ],
-                ],
-              ),
-            ),
-
-            const SizedBox(height: HrmsTokens.s4),
-
-            // Payslip (wired)
-            HrmsCard(
-              title: 'Latest payslip',
-              subtitle: 'Your most recent payslip (if generated).',
-              trailing: const Icon(Icons.description_outlined, color: HrmsTokens.primary),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                    if (companyId.isEmpty || u == null)
-                      const Text('No company assigned.')
-                    else if (_payslipsFuture == null)
-                      Text('Loading…', style: Theme.of(context).textTheme.bodySmall)
-                    else
-                      FutureBuilder<Map<String, dynamic>>(
-                        future: _payslipsFuture,
-                        builder: (context, snap) {
-                          if (snap.connectionState != ConnectionState.done) {
-                            return Text('Loading…', style: Theme.of(context).textTheme.bodySmall);
-                          }
-                          if (snap.hasError) {
-                            return Text('Error: ${snap.error}', style: const TextStyle(color: HrmsTokens.danger));
-                          }
-                          final data = snap.data;
-                          final rows = (data?['payslips'] as List?) ?? const [];
-                          if (rows.isEmpty) return Text('No payslips found.', style: Theme.of(context).textTheme.bodySmall);
-                          final p = Map<String, dynamic>.from(rows.first as Map);
-                          final dateLabel = _formatIndianDate(p['generated_at']);
-                          final net = num.tryParse((p['net_pay'] ?? '').toString());
-                          final netLabel = net != null ? UiFormatters.inr(net) : (p['net_pay'] ?? '—').toString();
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Generated', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.black54)),
-                                  Text(dateLabel, style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
-                                ],
-                              ),
-                              Text(
-                                'Net: $netLabel',
-                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                ],
-              ),
-            ),
-
-            // Upcoming holidays (wired)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Upcoming holidays', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 10),
-                    if (companyId.isEmpty)
-                      const Text('No company assigned.')
-                    else if (_holidaysFuture == null)
-                      const Text('Loading…')
-                    else
-                      FutureBuilder<List<Map<String, dynamic>>>(
-                        future: _holidaysFuture,
-                        builder: (context, snap) {
-                          if (snap.connectionState != ConnectionState.done) {
-                            return const Text('Loading…');
-                          }
-                          if (snap.hasError) {
-                            return Text('Error: ${snap.error}', style: const TextStyle(color: Colors.red));
-                          }
-                          final today = DateTime.now();
-                          final rows = (snap.data ?? const <Map<String, dynamic>>[])
-                              .where((h) {
-                                final d = _tryParseDate(h['holiday_end_date'] ?? h['holiday_date']);
-                                if (d == null) return false;
-                                return !d.isBefore(DateTime(today.year, today.month, today.day));
-                              })
-                              .toList()
-                            ..sort((a, b) => (a['holiday_date'] ?? '').toString().compareTo((b['holiday_date'] ?? '').toString()));
-
-                          final top = rows.take(5).toList();
-                          if (top.isEmpty) return const Text('No upcoming holidays.');
-                          return Column(
-                            children: [
-                              for (final h in top)
-                                ListTile(
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text((h['name'] ?? '').toString()),
-                                  subtitle: Text(_formatIndianDate(h['holiday_date'])),
-                                )
-                            ],
-                          );
-                        },
-                      ),
-                  ],
-                ),
-              ),
-            ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ManagerialNavCard extends StatelessWidget {
+  const _ManagerialNavCard({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.primaryLabel,
+    required this.onPrimary,
+    this.primaryFilled = true,
+    this.secondaryLabel,
+    this.onSecondary,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final String primaryLabel;
+  final VoidCallback onPrimary;
+  final bool primaryFilled;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: HrmsTokens.surface,
+        borderRadius: HrmsTokens.rLg(),
+        border: Border.all(color: HrmsTokens.border),
+        boxShadow: [HrmsTokens.shadowSm()],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(HrmsTokens.s4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: HrmsTokens.primary, size: 24),
+            const SizedBox(height: HrmsTokens.s3),
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: HrmsTokens.text,
+                  ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              description,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: HrmsTokens.muted,
+                    height: 1.35,
+                  ),
+            ),
+            const SizedBox(height: HrmsTokens.s4),
+            SizedBox(
+              width: double.infinity,
+              child: primaryFilled
+                  ? FilledButton(
+                      onPressed: onPrimary,
+                      child: Text(primaryLabel),
+                    )
+                  : OutlinedButton(
+                      onPressed: onPrimary,
+                      child: Text(primaryLabel),
+                    ),
+            ),
+            if (secondaryLabel != null && onSecondary != null) ...[
+              const SizedBox(height: HrmsTokens.s2),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: onSecondary,
+                  child: Text(secondaryLabel!),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -855,14 +1197,14 @@ class _LeaveBalanceRow extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: _kTeal.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              isPaid ? Icons.payments_outlined : Icons.event_busy_outlined,
-              color: _kTeal,
-              size: 22,
-            ),
+            color: HrmsTokens.primarySoft,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            isPaid ? Icons.payments_outlined : Icons.event_busy_outlined,
+            color: HrmsTokens.primary,
+            size: 22,
+          ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -872,7 +1214,7 @@ class _LeaveBalanceRow extends StatelessWidget {
                 Text(
                   name.isEmpty ? 'Leave' : name,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: _kTeal,
+                        color: HrmsTokens.primary,
                         fontWeight: FontWeight.w600,
                       ),
                 ),
@@ -887,7 +1229,7 @@ class _LeaveBalanceRow extends StatelessWidget {
               Text(
                 remStr,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: _kTeal,
+                      color: HrmsTokens.primary,
                       fontWeight: FontWeight.w800,
                       fontSize: 22,
                     ),

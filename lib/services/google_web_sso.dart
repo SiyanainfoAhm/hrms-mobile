@@ -21,17 +21,19 @@ class GoogleWebSso {
     _googleSignIn ??= GoogleSignIn(
       scopes: const <String>['email', 'openid'],
       serverClientId: c.googleWebClientId.isEmpty ? null : c.googleWebClientId,
-      clientId: _iosClientId(c),
+      clientId: _nativeOAuthClientId(c),
     );
     return _googleSignIn!;
   }
 
-  /// iOS OAuth client id from Google Cloud (different from the web client id). Optional on Android.
-  static String? _iosClientId(RuntimeConfig c) {
-    if (c.googleIosClientId.isEmpty) return null;
+  /// iOS / Android OAuth client ids from Google Cloud (different from [RuntimeConfig.googleWebClientId]).
+  /// Android: if null, Play Services expects `google-services.json` or a matching Android OAuth client
+  /// registered with your app package + SHA-1 (otherwise `ApiException: 10` / DEVELOPER_ERROR).
+  static String? _nativeOAuthClientId(RuntimeConfig c) {
     if (kIsWeb) return null;
     try {
-      if (Platform.isIOS) return c.googleIosClientId;
+      if (Platform.isIOS && c.googleIosClientId.isNotEmpty) return c.googleIosClientId;
+      if (Platform.isAndroid && c.googleAndroidClientId.isNotEmpty) return c.googleAndroidClientId;
     } on UnsupportedError {
       // Non-IO platforms when dart:io is stubbed.
     } catch (_) {}
@@ -44,7 +46,15 @@ class GoogleWebSso {
     if (!isConfigured) {
       throw StateError('Google sign-in is not configured.');
     }
-    final account = await _client(c).signIn();
+    final client = _client(c);
+    // Android (and sometimes iOS) reuses the last account without showing the chooser.
+    // Signing out first clears the in-app Google session so the user can pick an account.
+    try {
+      await client.signOut();
+    } catch (_) {
+      // ignore
+    }
+    final account = await client.signIn();
     if (account == null) return null;
     final auth = await account.authentication;
     final token = auth.idToken;
@@ -52,27 +62,35 @@ class GoogleWebSso {
       await signOut();
       throw StateError(
         'Google did not return an ID token. Use the same Web client id as hrms-web '
-        '`NEXT_PUBLIC_GOOGLE_CLIENT_ID` in `googleWebClientId`. On iOS, also set '
-        '`googleIosClientId` and CFBundleURLSchemes (reversed client id) in Info.plist.',
+        '`NEXT_PUBLIC_GOOGLE_CLIENT_ID` in `googleWebClientId`. On iOS, set '
+        '`googleIosClientId` and CFBundleURLSchemes (reversed client id) in Info.plist. '
+        'On Android, register package com.siyanainfo.hrms_mobile + SHA-1 in Google Cloud '
+        '(Android OAuth client) or set `googleAndroidClientId` in assets/config.json.',
       );
     }
     return token;
   }
 
-  /// Calls hrms-web `POST /api/auth/google` (same contract as the web app).
+  /// Calls hrms-web `POST /api/auth/google`. [signup] + [companyName] creates org + user (mobile signup); otherwise existing users only.
   static Future<Map<String, dynamic>> postVerify({
     required String idToken,
-    required bool isSignup,
+    bool signup = false,
+    String? companyName,
   }) async {
     final base = RuntimeConfig.instance.webAppInviteBaseUrl.trim().replaceAll(RegExp(r'/$'), '');
     final uri = Uri.parse('$base/api/auth/google');
+    final payload = <String, dynamic>{
+      'idToken': idToken,
+      'mode': signup ? 'signup' : 'login',
+    };
+    final co = companyName?.trim() ?? '';
+    if (co.isNotEmpty) {
+      payload['companyName'] = co;
+    }
     final res = await http.post(
       uri,
       headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode(<String, dynamic>{
-        'idToken': idToken,
-        'mode': isSignup ? 'signup' : 'login',
-      }),
+      body: jsonEncode(payload),
     );
 
     Map<String, dynamic> body;

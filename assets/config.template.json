@@ -4,6 +4,7 @@
   "webAppInviteBaseUrl": "https://hrms-web-rage.vercel.app",
   "googleWebClientId": "",
   "googleIosClientId": "",
+  "googleAndroidClientId": "",
   "inviteWebOnlyBaseUrl": "",
   "transactionNotifyUrl": "https://hrms-web-rage.vercel.app/api/webhooks/hrms-transaction-notify",
   "transactionNotifySecret": "",

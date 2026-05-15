@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
-import '../widgets/app_drawer.dart';
-
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.app});
 
@@ -418,7 +416,6 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
           ],
         ),
       ),
-      drawer: AppDrawer(app: widget.app),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _err != null && _company == null

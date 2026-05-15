@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -69,9 +70,12 @@ class AppState extends ChangeNotifier {
 
   String _friendlyError(Object e) {
     if (e is PostgrestException) {
-      final msg = e.message.trim();
-      if (_isAccountNotFoundMessage(msg)) return 'Account does not exist';
-      if (msg.isNotEmpty) return msg;
+      final raw = '${e.message} ${e.details ?? ''}'.trim();
+      if (_isAccountNotFoundMessage(raw)) return 'User does not exist';
+      if (_isUserAlreadyExistsMessage(raw) || e.code == '23505') {
+        return 'User already exists. Sign in instead or use a different email.';
+      }
+      if (e.message.trim().isNotEmpty) return e.message.trim();
       // Fallbacks by code are intentionally generic.
       if (e.code == '28000') return 'Invalid email or password.';
       return 'Request failed. Please try again.';
@@ -83,23 +87,48 @@ class AppState extends ChangeNotifier {
     }
     if (e is StateError) {
       final msg = e.message.trim();
-      if (_isAccountNotFoundMessage(msg)) return 'Account does not exist';
+      if (_isAccountNotFoundMessage(msg)) return 'User does not exist';
       if (msg.isNotEmpty) return msg;
       return 'Something went wrong. Please try again.';
     }
+    if (e is PlatformException && e.code == 'sign_in_failed') {
+      final m = e.message ?? '';
+      // Android: com.google.android.gms.common.api.ApiException: 10 = DEVELOPER_ERROR (SHA-1 / OAuth client).
+      if (m.contains('ApiException: 10')) {
+        return 'Google Sign-In is not registered for this Android app. In Google Cloud '
+            'Console (same project as your Web client id), open Credentials → Create '
+            'OAuth client ID → Android: package name com.siyanainfo.hrms_mobile, '
+            'SHA-1 from signingReport for your debug or release keystore. Optionally '
+            'put that Android client id in googleAndroidClientId in assets/config.json.';
+      }
+      final trimmed = m.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
     final s = e.toString();
-    if (_isAccountNotFoundMessage(s)) return 'Account does not exist';
+    if (_isAccountNotFoundMessage(s)) return 'User does not exist';
+    if (_isUserAlreadyExistsMessage(s)) return 'User already exists. Sign in instead or use a different email.';
     if (s.contains('Invalid email or password')) return 'Invalid email or password.';
     return 'Something went wrong. Please try again.';
   }
 
   static bool _isAccountNotFoundMessage(String s) {
     final t = s.toLowerCase();
-    return t.contains('account does not exist') || t.contains('no account found');
+    return t.contains('account does not exist') ||
+        t.contains('no account found') ||
+        t.contains('user does not exist');
+  }
+
+  static bool _isUserAlreadyExistsMessage(String s) {
+    final t = s.toLowerCase();
+    return t.contains('user already exists') ||
+        t.contains('email already registered') ||
+        t.contains('already registered') ||
+        t.contains('duplicate key') ||
+        t.contains('unique constraint') ||
+        t.contains('unique violation');
   }
 
   void clearError() {
-    if (error == null) return;
     error = null;
     notifyListeners();
   }
@@ -156,8 +185,9 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Same backend path as hrms-web Google button: web `/api/auth/google`, then `hrms_me` for company fields.
-  Future<void> loginWithGoogle({required bool isSignup}) async {
+  /// Returns `true` if the user completed Google sign-in and a session was stored.
+  /// Returns `false` if the user closed the account picker (no error).
+  Future<bool> loginWithGoogle() async {
     error = null;
     notifyListeners();
     if (!GoogleWebSso.isConfigured) {
@@ -169,9 +199,11 @@ class AppState extends ChangeNotifier {
     try {
       final idToken = await GoogleWebSso.obtainIdToken();
       if (idToken == null || idToken.isEmpty) {
-        return;
+        error = null;
+        notifyListeners();
+        return false;
       }
-      final session = await GoogleWebSso.postVerify(idToken: idToken, isSignup: isSignup);
+      final session = await GoogleWebSso.postVerify(idToken: idToken);
       final id = session['id']?.toString() ?? '';
       if (id.isEmpty) {
         throw StateError('Invalid account response.');
@@ -184,6 +216,7 @@ class AppState extends ChangeNotifier {
       error = null;
       await _persist();
       notifyListeners();
+      return true;
     } catch (e) {
       error = _friendlyError(e);
       if (kDebugMode) {
@@ -191,15 +224,70 @@ class AppState extends ChangeNotifier {
         print('Google login error: $e');
       }
       notifyListeners();
+      // Let the user pick a different Google account on the next attempt (e.g. after "User does not exist").
+      try {
+        await GoogleWebSso.signOut();
+      } catch (_) {}
       rethrow;
     }
   }
 
-  Future<void> signup(String email, String password, {String? name}) async {
+  /// Returns `true` if signup completed. Returns `false` if the user dismissed Google (no error).
+  Future<bool> signupWithGoogle({required String companyName}) async {
+    error = null;
+    notifyListeners();
+    if (!GoogleWebSso.isConfigured) {
+      error =
+          'Google sign-in is not configured. Set webAppInviteBaseUrl and googleWebClientId in assets/config.json (same values as hrms-web).';
+      notifyListeners();
+      throw StateError(error!);
+    }
+    final co = companyName.trim();
+    if (co.isEmpty) {
+      error = 'Company name is required.';
+      notifyListeners();
+      throw StateError(error!);
+    }
+    try {
+      final idToken = await GoogleWebSso.obtainIdToken();
+      if (idToken == null || idToken.isEmpty) {
+        error = null;
+        notifyListeners();
+        return false;
+      }
+      final session = await GoogleWebSso.postVerify(idToken: idToken, signup: true, companyName: co);
+      final id = session['id']?.toString() ?? '';
+      if (id.isEmpty) {
+        throw StateError('Invalid account response.');
+      }
+      final me = await _rpc.me(id);
+      if (me == null) {
+        throw StateError('Could not load your profile.');
+      }
+      user = SessionUser.fromRpc(me);
+      error = null;
+      await _persist();
+      notifyListeners();
+      return true;
+    } catch (e) {
+      error = _friendlyError(e);
+      if (kDebugMode) {
+        // ignore: avoid_print
+        print('Google signup error: $e');
+      }
+      notifyListeners();
+      try {
+        await GoogleWebSso.signOut();
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  Future<void> signup(String email, String password, {String? name, required String companyName}) async {
     error = null;
     notifyListeners();
     try {
-      final row = await _rpc.signup(email, password, name: name);
+      final row = await _rpc.signup(email, password, name: name, companyName: companyName);
       user = SessionUser.fromRpc(row);
       error = null;
       await _persist();

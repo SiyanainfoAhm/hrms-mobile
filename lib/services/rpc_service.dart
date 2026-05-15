@@ -168,12 +168,13 @@ class RpcService {
     return Map<String, dynamic>.from(rows.first as Map);
   }
 
-  Future<Map<String, dynamic>> signup(String email, String password, {String? name}) async {
+  Future<Map<String, dynamic>> signup(String email, String password, {String? name, required String companyName}) async {
     final normalizedEmail = email.trim().toLowerCase();
     final res = await _sb.rpc('hrms_signup', params: {
       'p_email': normalizedEmail,
       'p_password': password,
       'p_name': name,
+      'p_company_name': companyName.trim(),
     });
     final rows = (res as List).cast<dynamic>();
     return Map<String, dynamic>.from(rows.first as Map);

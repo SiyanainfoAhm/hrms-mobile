@@ -4,8 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/rpc_service.dart';
 import '../state/app_state.dart';
-import '../widgets/app_drawer.dart';
-
 class EmployeesScreen extends StatefulWidget {
   const EmployeesScreen({super.key, required this.app});
 
@@ -182,7 +180,6 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Employees')),
-      drawer: AppDrawer(app: widget.app),
       body: Padding(
         padding: const EdgeInsets.all(12),
         child: !canManage

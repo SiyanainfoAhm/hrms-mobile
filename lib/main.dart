@@ -21,6 +21,9 @@ import 'screens/payroll_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/payslips_screen.dart';
 import 'theme/hrms_theme.dart';
+import 'widgets/hrms_shell/main_shell.dart';
+
+final GlobalKey<NavigatorState> hrmsRootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'hrmsRoot');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,58 +53,93 @@ class _HrmsAppState extends State<HrmsApp> {
     super.initState();
     final app = widget.app;
     _router = GoRouter(
-      initialLocation: app.user != null ? '/dashboard' : '/login',
+      navigatorKey: hrmsRootNavigatorKey,
+      initialLocation: app.user != null ? '/home' : '/login',
       refreshListenable: app,
       redirect: (context, state) {
         if (app.loading) return null;
         final loggedIn = app.user != null;
-        final isAuthRoute = state.matchedLocation == '/login' || state.matchedLocation == '/signup';
+        final loc = state.matchedLocation;
+        final isAuthRoute = loc == '/login' || loc == '/signup';
         if (!loggedIn && !isAuthRoute) return '/login';
-        if (loggedIn && isAuthRoute) return '/dashboard';
+        if (loggedIn && isAuthRoute) return '/home';
         return null;
       },
       routes: [
         GoRoute(path: '/login', builder: (c, s) => LoginScreen(app: app)),
         GoRoute(path: '/signup', builder: (c, s) => SignupScreen(app: app)),
-        GoRoute(
-          path: '/dashboard',
-          builder: (context, state) => DashboardScreen(app: app),
+        GoRoute(path: '/dashboard', redirect: (c, s) => '/home'),
+        StatefulShellRoute.indexedStack(
+          builder: (context, state, navigationShell) => MainShell(navigationShell: navigationShell),
+          branches: [
+            StatefulShellBranch(
+              routes: [
+                GoRoute(path: '/home', builder: (c, s) => DashboardScreen(app: app)),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(path: '/attendance', builder: (c, s) => AttendanceScreen(app: app)),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(path: '/leave', builder: (c, s) => LeaveScreen(app: app)),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(path: '/payslips', builder: (c, s) => PayslipsScreen(app: app)),
+              ],
+            ),
+            StatefulShellBranch(
+              routes: [
+                GoRoute(path: '/profile', builder: (c, s) => ProfileScreen(app: app)),
+              ],
+            ),
+          ],
         ),
         GoRoute(
-          path: '/attendance',
-          builder: (c, s) => AttendanceScreen(app: app),
+          parentNavigatorKey: hrmsRootNavigatorKey,
+          path: '/holidays',
+          builder: (c, s) => HolidaysScreen(app: app),
         ),
         GoRoute(
+          parentNavigatorKey: hrmsRootNavigatorKey,
+          path: '/reimbursements',
+          builder: (c, s) => ReimbursementsScreen(app: app),
+        ),
+        GoRoute(
+          parentNavigatorKey: hrmsRootNavigatorKey,
           path: '/employees',
           builder: (c, s) => EmployeesScreen(app: app),
-          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/home',
         ),
         GoRoute(
+          parentNavigatorKey: hrmsRootNavigatorKey,
           path: '/employees/invite/:userId',
           builder: (c, s) => EmployeeInviteScreen(
             app: app,
             targetUserId: s.pathParameters['userId'] ?? '',
           ),
-          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/home',
         ),
-        GoRoute(path: '/holidays', builder: (c, s) => HolidaysScreen(app: app)),
-        GoRoute(path: '/leave', builder: (c, s) => LeaveScreen(app: app)),
-        GoRoute(path: '/reimbursements', builder: (c, s) => ReimbursementsScreen(app: app)),
-        GoRoute(path: '/profile', builder: (c, s) => ProfileScreen(app: app)),
-        GoRoute(path: '/profile/change-password', builder: (c, s) => ChangePasswordScreen(app: app)),
         GoRoute(
+          parentNavigatorKey: hrmsRootNavigatorKey,
           path: '/payroll',
           builder: (c, s) => PayrollScreen(app: app),
-          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/home',
         ),
         GoRoute(
+          parentNavigatorKey: hrmsRootNavigatorKey,
           path: '/settings',
           builder: (c, s) => SettingsScreen(app: app),
-          redirect: (c, s) => app.user?.isManagerial == true ? null : '/dashboard',
+          redirect: (c, s) => app.user?.isManagerial == true ? null : '/home',
         ),
         GoRoute(
-          path: '/payslips',
-          builder: (c, s) => PayslipsScreen(app: app),
+          parentNavigatorKey: hrmsRootNavigatorKey,
+          path: '/profile/change-password',
+          builder: (c, s) => ChangePasswordScreen(app: app),
         ),
       ],
     );

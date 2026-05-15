@@ -20,6 +20,8 @@ class RuntimeConfig {
   String googleWebClientId = '';
   /// Google Cloud **iOS** OAuth client id (not the web id). Optional on Android; on iOS you also need `CFBundleURLSchemes` in Info.plist with the reversed client id.
   String googleIosClientId = '';
+  /// Google Cloud **Android** OAuth client id (not the web id). Optional; use when you are not using `android/app/google-services.json`. The Android client must still list package `com.siyanainfo.hrms_mobile` and your SHA-1 in Google Cloud Console.
+  String googleAndroidClientId = '';
   /// Same as web `NEXT_PUBLIC_AGENT_DOWNLOAD_URL` — HRMS Attendance Agent installer/page (optional).
   String agentDownloadUrl = '';
   /// Same as web `POWER_AUTOMATE_EMAIL_URL` — HTTP trigger URL; mobile POSTs `{toEmail,subject,body}` with `Content-Type: application/json` only (no shared secret header).
@@ -42,6 +44,7 @@ class RuntimeConfig {
     transactionNotifySecret = (json['transactionNotifySecret'] ?? '').toString().trim();
     googleWebClientId = (json['googleWebClientId'] ?? '').toString().trim();
     googleIosClientId = (json['googleIosClientId'] ?? '').toString().trim();
+    googleAndroidClientId = (json['googleAndroidClientId'] ?? '').toString().trim();
     agentDownloadUrl = (json['agentDownloadUrl'] ?? '').toString().trim();
     powerAutomateEmailUrl = (json['powerAutomateEmailUrl'] ?? '').toString().trim();
     notifyHrEmail = (json['notifyHrEmail'] ?? '').toString().trim();

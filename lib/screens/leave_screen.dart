@@ -9,7 +9,6 @@ import '../ui/empty_state.dart';
 import '../ui/formatters.dart';
 import '../ui/hrms_card.dart';
 import '../ui/status_chip.dart';
-import '../widgets/app_drawer.dart';
 
 class LeaveScreen extends StatefulWidget {
   const LeaveScreen({super.key, required this.app});
@@ -72,11 +71,15 @@ class _LeaveScreenState extends State<LeaveScreen> {
     final scope = isAdmin ? 'all' : 'me';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Leave')),
-      drawer: AppDrawer(app: widget.app),
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('Leave'),
+      ),
       floatingActionButton: (companyId.isEmpty || userId.isEmpty)
           ? null
-          : FloatingActionButton(
+          : Padding(
+        padding: const EdgeInsets.only(bottom: 76),
+        child: FloatingActionButton(
               onPressed: () async {
                 final svc = RpcService();
                 final types = await svc.leaveTypesList(companyId);
@@ -100,6 +103,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
               },
               child: const Icon(Icons.add),
             ),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(HrmsTokens.s4),
         child: (companyId.isEmpty || userId.isEmpty)

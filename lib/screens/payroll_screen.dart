@@ -6,7 +6,6 @@ import '../services/rpc_service.dart';
 import '../state/app_state.dart';
 import '../ui/formatters.dart';
 import '../ui/payslip_html.dart';
-import '../widgets/app_drawer.dart';
 import 'payroll_private_master_editor.dart';
 import 'payroll_run_tab.dart';
 
@@ -78,7 +77,6 @@ class _PayrollScreenState extends State<PayrollScreen> with SingleTickerProvider
           ],
         ),
       ),
-      drawer: AppDrawer(app: widget.app),
       body: TabBarView(
         controller: _tabController,
         children: [

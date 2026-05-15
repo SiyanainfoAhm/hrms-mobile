@@ -23,6 +23,14 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _passwordVisible = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.app.clearError();
+    });
+  }
+
+  @override
   void dispose() {
     email.dispose();
     password.dispose();
@@ -40,7 +48,12 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  void _clearError() {
+    widget.app.clearError();
+  }
+
   Future<void> submit() async {
+    _clearError();
     setState(() => busy = true);
     try {
       await widget.app.login(email.text.trim(), password.text);
@@ -48,7 +61,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _showSuccess('Signed in successfully.');
       await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;
-      context.go('/dashboard');
+      context.go('/home');
     } catch (_) {
       // error shown from app.error via ListenableBuilder
     } finally {
@@ -57,14 +70,16 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _googleLogin() async {
+    _clearError();
     setState(() => busy = true);
     try {
-      await widget.app.loginWithGoogle(isSignup: false);
+      final ok = await widget.app.loginWithGoogle();
       if (!mounted) return;
+      if (!ok) return;
       _showSuccess('Signed in successfully.');
       await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;
-      context.go('/dashboard');
+      context.go('/home');
     } catch (_) {
       // error shown from app.error
     } finally {
@@ -74,9 +89,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final googleFirst = GoogleWebSso.isConfigured;
     return HrmsAuthShell(
       title: 'Welcome back',
-      subtitle: 'Sign in with your work email and password.',
+      subtitle: googleFirst
+          ? 'Sign in if you already have HRMS access (Google or email below). To create a new company account, use Sign up.'
+          : 'Sign in with your work email and password.',
       child: ListenableBuilder(
         listenable: widget.app,
         builder: (context, _) {
@@ -84,6 +102,13 @@ class _LoginScreenState extends State<LoginScreen> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (googleFirst) ...[
+                OutlinedButton(
+                  onPressed: busy ? null : _googleLogin,
+                  child: Text(busy ? 'Please wait…' : 'Continue with Google'),
+                ),
+                const AuthOrDivider(),
+              ],
               AutofillGroup(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -94,10 +119,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       textInputAction: TextInputAction.next,
                       autofillHints: const [AutofillHints.email],
                       decoration: const InputDecoration(labelText: 'Email'),
+                      onTap: _clearError,
                       onChanged: (_) {
-                        if (widget.app.error != null) {
-                          widget.app.clearError();
-                        }
+                        if (widget.app.error != null) _clearError();
                       },
                     ),
                     const SizedBox(height: 12),
@@ -113,11 +137,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       smartQuotesType: SmartQuotesType.disabled,
                       enableIMEPersonalizedLearning: false,
                       autofillHints: const [AutofillHints.password],
+                      onTap: _clearError,
                       onSubmitted: (_) => submit(),
                       onChanged: (_) {
-                        if (widget.app.error != null) {
-                          widget.app.clearError();
-                        }
+                        if (widget.app.error != null) _clearError();
                       },
                       decoration: InputDecoration(
                         labelText: 'Password',
@@ -144,16 +167,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 onPressed: busy ? null : submit,
                 child: Text(busy ? 'Signing in…' : 'Sign in'),
               ),
-              if (GoogleWebSso.isConfigured) ...[
-                const AuthOrDivider(),
-                OutlinedButton(
-                  onPressed: busy ? null : _googleLogin,
-                  child: Text(busy ? 'Please wait…' : 'Continue with Google'),
-                ),
-              ],
               const SizedBox(height: 12),
               TextButton(
-                onPressed: busy ? null : () => context.go('/signup'),
+                onPressed: busy
+                    ? null
+                    : () {
+                        _clearError();
+                        context.go('/signup');
+                      },
                 child: const Text("Don't have an account? Sign up"),
               ),
             ],
