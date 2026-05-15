@@ -11,6 +11,10 @@ class RuntimeConfig {
   String supabaseAnonKey = '';
   /// Public origin of the **web** HRMS app (no trailing slash), e.g. https://hrms.example.com — used to build `/invite/{token}` URLs for the Edge Function (same as `NEXT_PUBLIC_APP_URL` on web).
   String webAppInviteBaseUrl = '';
+  /// Optional override; default `{webAppInviteBaseUrl}/privacy` (public page on web app).
+  String privacyPolicyUrl = '';
+  /// Optional override; default `{webAppInviteBaseUrl}/terms`.
+  String termsUrl = '';
   /// When set, invite links in the mobile HR “Invite” tab use this origin instead of [webAppInviteBaseUrl] (e.g. production web only).
   String inviteWebOnlyBaseUrl = '';
   /// Full URL to `POST /api/webhooks/hrms-transaction-notify` on the deployed web app (triggers Power Automate emails). Optional header: same value as server `HRMS_TRANSACTION_NOTIFY_SECRET` when that env is set; leave empty when the server accepts unsigned webhooks (dev).
@@ -39,6 +43,8 @@ class RuntimeConfig {
     supabaseUrl = (json['supabaseUrl'] ?? '').toString().trim();
     supabaseAnonKey = (json['supabaseAnonKey'] ?? '').toString().trim();
     webAppInviteBaseUrl = (json['webAppInviteBaseUrl'] ?? '').toString().trim().replaceAll(RegExp(r'/$'), '');
+    privacyPolicyUrl = (json['privacyPolicyUrl'] ?? '').toString().trim();
+    termsUrl = (json['termsUrl'] ?? '').toString().trim();
     inviteWebOnlyBaseUrl = (json['inviteWebOnlyBaseUrl'] ?? '').toString().trim().replaceAll(RegExp(r'/$'), '');
     transactionNotifyUrl = (json['transactionNotifyUrl'] ?? '').toString().trim();
     transactionNotifySecret = (json['transactionNotifySecret'] ?? '').toString().trim();

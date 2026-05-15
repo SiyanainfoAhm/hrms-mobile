@@ -2,6 +2,8 @@
   "supabaseUrl": "https://your-project.supabase.co",
   "supabaseAnonKey": "your-anon-key",
   "webAppInviteBaseUrl": "https://hrms-web-rage.vercel.app",
+  "privacyPolicyUrl": "",
+  "termsUrl": "",
   "googleWebClientId": "",
   "googleIosClientId": "",
   "googleAndroidClientId": "",

@@ -1,10 +1,12 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-
+import '../legal/legal_config.dart';
+import '../legal/legal_documents.dart';
+import '../legal/legal_urls.dart';
 import '../theme/tokens.dart';
 
-/// Privacy Policy and Terms links (login, signup, profile).
+/// Privacy Policy and Terms links (login, signup, profile). Opens web URLs when configured.
 class LegalLinksRow extends StatelessWidget {
   const LegalLinksRow({
     super.key,
@@ -18,6 +20,13 @@ class LegalLinksRow extends StatelessWidget {
 
   /// When true, shows "By continuing, you agree to…" (for signup).
   final bool showAgreementLine;
+
+  Future<void> _openLegal(BuildContext context, LegalDocumentKind kind) async {
+    final url = kind == LegalDocumentKind.privacy ? LegalConfig.privacyPolicyUrl : LegalConfig.termsUrl;
+    if (await openLegalUrl(url)) return;
+    if (!context.mounted) return;
+    context.push(kind == LegalDocumentKind.privacy ? '/privacy' : '/terms');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,8 +42,8 @@ class LegalLinksRow extends StatelessWidget {
           height: 1.4,
         );
 
-    final privacyRecognizer = TapGestureRecognizer()..onTap = () => context.push('/privacy');
-    final termsRecognizer = TapGestureRecognizer()..onTap = () => context.push('/terms');
+    final privacyRecognizer = TapGestureRecognizer()..onTap = () => _openLegal(context, LegalDocumentKind.privacy);
+    final termsRecognizer = TapGestureRecognizer()..onTap = () => _openLegal(context, LegalDocumentKind.terms);
 
     final align = center ? TextAlign.center : TextAlign.start;
 

@@ -27,9 +27,9 @@ class LegalDocuments {
     final entity = LegalConfig.legalEntityName;
     return switch (kind) {
       LegalDocumentKind.privacy =>
-        'This Privacy Policy describes how $entity ("we", "us", "our") collects, uses, stores, and protects personal information when you use the $app mobile application and related HRMS services (the "Service"). By creating an account or using the Service, you acknowledge this Policy.',
+        'This Privacy Policy describes how $entity ("we", "us", "our") collects, uses, stores, and protects personal information when you use the $app mobile application, web application, and related HRMS services (the "Service"). By creating an account or using the Service, you acknowledge this Policy.',
       LegalDocumentKind.terms =>
-        'These Terms and Conditions ("Terms") govern your access to and use of the $app mobile application and related HRMS services (the "Service") operated by $entity ("we", "us", "our"). Please read them carefully before using the Service.',
+        'These Terms and Conditions ("Terms") govern your access to and use of the $app mobile application, web application, and related HRMS services (the "Service") operated by $entity ("we", "us", "our"). Please read them carefully before using the Service.',
     };
   }
 

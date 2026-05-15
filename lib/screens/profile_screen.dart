@@ -10,6 +10,8 @@ import '../widgets/hrms_ui/app_card.dart';
 import '../widgets/hrms_ui/app_snackbar.dart';
 import '../widgets/hrms_ui/profile_menu_tile.dart';
 import '../widgets/hrms_ui/section_header.dart';
+import '../legal/legal_config.dart';
+import '../legal/legal_urls.dart';
 import '../widgets/profile_documents_tab.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -525,13 +527,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.privacy_tip_outlined,
           title: 'Privacy Policy',
           subtitle: 'How we handle your data',
-          onTap: () => context.push('/privacy'),
+          onTap: () async {
+            final opened = await openLegalUrl(LegalConfig.privacyPolicyUrl);
+            if (!opened && mounted) context.push('/privacy');
+          },
         ),
         ProfileMenuTile(
           icon: Icons.description_outlined,
           title: 'Terms and Conditions',
           subtitle: 'Rules for using HRMS',
-          onTap: () => context.push('/terms'),
+          onTap: () async {
+            final opened = await openLegalUrl(LegalConfig.termsUrl);
+            if (!opened && mounted) context.push('/terms');
+          },
         ),
         ProfileMenuTile(
           icon: Icons.logout,

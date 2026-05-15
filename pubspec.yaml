@@ -80,6 +80,8 @@ flutter:
     - assets/config.template.json
     - assets/config.json
     - assets/branding/hrms_agent_logo.png
+    - assets/branding/hrms_app_icon.png
+    - assets/branding/hrms_play_feature_graphic.png
     - assets/branding/google_g.svg
 
   # An image asset can refer to one or more resolution-specific "variants", see
@@ -112,17 +114,17 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: assets/branding/hrms_agent_logo.png
+  image_path: assets/branding/hrms_app_icon.png
   adaptive_icon_background: "#0f172a"
-  adaptive_icon_foreground: assets/branding/hrms_agent_logo.png
+  adaptive_icon_foreground: assets/branding/hrms_app_icon.png
   background_color_ios: "#0f172a"
   remove_alpha_ios: true
   web:
     generate: true
-    image_path: assets/branding/hrms_agent_logo.png
+    image_path: assets/branding/hrms_app_icon.png
     background_color: "#0f172a"
     theme_color: "#0f172a"
   windows:
     generate: true
-    image_path: assets/branding/hrms_agent_logo.png
+    image_path: assets/branding/hrms_app_icon.png
     icon_size: 256
