@@ -520,6 +520,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
             ),
           ),
+        const SectionHeader(title: 'Legal', subtitle: 'Privacy and terms of use'),
+        ProfileMenuTile(
+          icon: Icons.privacy_tip_outlined,
+          title: 'Privacy Policy',
+          subtitle: 'How we handle your data',
+          onTap: () => context.push('/privacy'),
+        ),
+        ProfileMenuTile(
+          icon: Icons.description_outlined,
+          title: 'Terms and Conditions',
+          subtitle: 'Rules for using HRMS',
+          onTap: () => context.push('/terms'),
+        ),
         ProfileMenuTile(
           icon: Icons.logout,
           title: 'Log out',

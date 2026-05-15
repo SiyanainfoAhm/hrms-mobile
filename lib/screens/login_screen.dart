@@ -5,6 +5,7 @@ import '../services/google_web_sso.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
 import '../widgets/auth_or_divider.dart';
+import '../widgets/google_sign_in_button.dart';
 import '../widgets/hrms_auth_shell.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -89,11 +90,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final googleFirst = GoogleWebSso.isConfigured;
+    final googleConfigured = GoogleWebSso.isConfigured;
     return HrmsAuthShell(
       title: 'Welcome back',
-      subtitle: googleFirst
-          ? 'Sign in if you already have HRMS access (Google or email below). To create a new company account, use Sign up.'
+      subtitle: googleConfigured
+          ? 'Sign in with your work email and password, or continue with Google below.'
           : 'Sign in with your work email and password.',
       child: ListenableBuilder(
         listenable: widget.app,
@@ -102,13 +103,6 @@ class _LoginScreenState extends State<LoginScreen> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (googleFirst) ...[
-                OutlinedButton(
-                  onPressed: busy ? null : _googleLogin,
-                  child: Text(busy ? 'Please wait…' : 'Continue with Google'),
-                ),
-                const AuthOrDivider(),
-              ],
               AutofillGroup(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -167,6 +161,16 @@ class _LoginScreenState extends State<LoginScreen> {
                 onPressed: busy ? null : submit,
                 child: Text(busy ? 'Signing in…' : 'Sign in'),
               ),
+              if (googleConfigured) ...[
+                const SizedBox(height: 16),
+                const AuthOrDivider(),
+                const SizedBox(height: 8),
+                GoogleSignInButton(
+                  label: 'Continue with Google',
+                  loading: busy,
+                  onPressed: _googleLogin,
+                ),
+              ],
               const SizedBox(height: 12),
               TextButton(
                 onPressed: busy

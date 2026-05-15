@@ -224,33 +224,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return r == true;
   }
 
-  Future<void> _confirmAndPunch(String action) async {
-    final ok = await _confirmAttendanceAction(
-      title: action == 'in' ? 'Punch in now?' : 'Final punch out now?',
-      message: action == 'in'
-          ? 'This will start your workday timer.'
-          : "This will complete today's attendance.",
-      confirmLabel: action == 'in' ? 'Punch in' : 'Punch out',
-    );
-    if (!ok || !mounted) return;
+  Future<void> _onPunchTap(String action) async {
+    if (action == 'out') {
+      final ok = await _confirmAttendanceAction(
+        title: 'Final punch out now?',
+        message: "This will complete today's attendance.",
+        confirmLabel: 'Punch out',
+      );
+      if (!ok || !mounted) return;
+    }
     await _punch(action);
-  }
-
-  Future<void> _confirmAndBreakToggle(String kind, bool running) async {
-    final isLunch = kind == 'lunch';
-    final title = isLunch
-        ? (running ? 'End lunch break?' : 'Start lunch break?')
-        : (running ? 'End tea break?' : 'Start tea break?');
-    final message = isLunch
-        ? (running ? 'This will mark Lunch In now.' : 'This will mark Lunch Out now.')
-        : (running ? 'This will end tea break now.' : 'This will start tea break now.');
-    final ok = await _confirmAttendanceAction(
-      title: title,
-      message: message,
-      confirmLabel: 'Confirm',
-    );
-    if (!ok || !mounted) return;
-    await _breakToggle(kind);
   }
 
   Future<void> _openAgentDownload() async {
@@ -550,7 +533,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: punching || !hasEmployee || punchedIn || dayComplete ? null : () => _confirmAndPunch('in'),
+                    onPressed: punching || !hasEmployee || punchedIn || dayComplete ? null : () => _onPunchTap('in'),
                     icon: const Icon(Icons.login),
                     label: const Text('Punch in'),
                   ),
@@ -558,7 +541,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 const SizedBox(width: HrmsTokens.s3),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: punching || !punchedIn ? null : () => _confirmAndPunch('out'),
+                    onPressed: punching || !punchedIn ? null : () => _onPunchTap('out'),
                     icon: const Icon(Icons.logout),
                     label: const Text('Punch out'),
                   ),
@@ -570,7 +553,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: punching || !punchedIn ? null : () => _confirmAndBreakToggle('lunch', lunchRunning),
+                    onPressed: punching || !punchedIn ? null : () => _breakToggle('lunch'),
                     child: Text(
                       lunchRunning
                           ? 'End lunch (${_formatDurationMs(lunchTotalMs)})'
@@ -581,7 +564,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 const SizedBox(width: HrmsTokens.s3),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: punching || !punchedIn ? null : () => _confirmAndBreakToggle('tea', teaRunning),
+                    onPressed: punching || !punchedIn ? null : () => _breakToggle('tea'),
                     child: Text(
                       teaRunning
                           ? 'End tea (${_formatDurationMs(teaTotalMs)})'
@@ -1049,16 +1032,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         automaticallyImplyLeading: false,
         title: const Text('Dashboard'),
-        actions: [
-          IconButton(
-            onPressed: () async {
-              await app.logout();
-              if (!context.mounted) return;
-            },
-            icon: const Icon(Icons.logout),
-            tooltip: 'Logout',
-          )
-        ],
       ),
       body: RefreshIndicator(
         onRefresh: () async {

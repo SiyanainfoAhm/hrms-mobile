@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
+import 'legal_links_row.dart';
 
 /// Signflow-style auth chrome: branded gradient panel + light card (split on tablet/desktop).
 class HrmsAuthShell extends StatelessWidget {
@@ -251,6 +252,8 @@ class _FormPanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
+              const LegalLinksRow(center: true, dense: true),
+              const SizedBox(height: 10),
               Text(
                 'Secure access for authorised users only.',
                 textAlign: TextAlign.center,

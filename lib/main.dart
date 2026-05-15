@@ -20,6 +20,8 @@ import 'screens/change_password_screen.dart';
 import 'screens/payroll_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/payslips_screen.dart';
+import 'screens/legal_document_screen.dart';
+import 'legal/legal_documents.dart';
 import 'theme/hrms_theme.dart';
 import 'widgets/hrms_shell/main_shell.dart';
 
@@ -61,13 +63,22 @@ class _HrmsAppState extends State<HrmsApp> {
         final loggedIn = app.user != null;
         final loc = state.matchedLocation;
         final isAuthRoute = loc == '/login' || loc == '/signup';
-        if (!loggedIn && !isAuthRoute) return '/login';
+        final isPublicLegal = loc == '/privacy' || loc == '/terms';
+        if (!loggedIn && !isAuthRoute && !isPublicLegal) return '/login';
         if (loggedIn && isAuthRoute) return '/home';
         return null;
       },
       routes: [
         GoRoute(path: '/login', builder: (c, s) => LoginScreen(app: app)),
         GoRoute(path: '/signup', builder: (c, s) => SignupScreen(app: app)),
+        GoRoute(
+          path: '/privacy',
+          builder: (c, s) => const LegalDocumentScreen(kind: LegalDocumentKind.privacy),
+        ),
+        GoRoute(
+          path: '/terms',
+          builder: (c, s) => const LegalDocumentScreen(kind: LegalDocumentKind.terms),
+        ),
         GoRoute(path: '/dashboard', redirect: (c, s) => '/home'),
         StatefulShellRoute.indexedStack(
           builder: (context, state, navigationShell) => MainShell(navigationShell: navigationShell),

@@ -4,9 +4,10 @@ import 'package:go_router/go_router.dart';
 import '../services/google_web_sso.dart';
 import '../state/app_state.dart';
 import '../theme/tokens.dart';
+import '../widgets/auth_or_divider.dart';
+import '../widgets/google_sign_in_button.dart';
 import '../widgets/hrms_auth_shell.dart';
-
-enum _SignupKind { emailPassword, google }
+import '../widgets/legal_links_row.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key, required this.app});
@@ -23,7 +24,6 @@ class _SignupScreenState extends State<SignupScreen> {
   final email = TextEditingController();
   final password = TextEditingController();
   final confirm = TextEditingController();
-  _SignupKind _kind = _SignupKind.emailPassword;
   bool busy = false;
   bool _passwordVisible = false;
   bool _confirmPasswordVisible = false;
@@ -137,12 +137,13 @@ class _SignupScreenState extends State<SignupScreen> {
   Widget build(BuildContext context) {
     final mismatch = password.text.isNotEmpty && confirm.text.isNotEmpty && password.text != confirm.text;
     final googleConfigured = GoogleWebSso.isConfigured;
-    final createEnabled = !busy && _kind == _SignupKind.emailPassword && _emailPasswordReady;
-    final googleEnabled = !busy && _kind == _SignupKind.google && _companyOk && googleConfigured;
+    final createEnabled = !busy && _emailPasswordReady;
 
     return HrmsAuthShell(
       title: 'Create your account',
-      subtitle: 'Enter your company first, then sign up with email or Google.',
+      subtitle: googleConfigured
+          ? 'Enter your company and email details, then create an account or sign up with Google below.'
+          : 'Enter your company and email details to create an account.',
       child: ListenableBuilder(
         listenable: widget.app,
         builder: (context, _) {
@@ -162,108 +163,89 @@ class _SignupScreenState extends State<SignupScreen> {
                   setState(() {});
                 },
               ),
-              const SizedBox(height: 16),
-              SegmentedButton<_SignupKind>(
-                segments: const [
-                  ButtonSegment<_SignupKind>(
-                    value: _SignupKind.emailPassword,
-                    label: Text('Email & password'),
-                  ),
-                  ButtonSegment<_SignupKind>(
-                    value: _SignupKind.google,
-                    label: Text('Google'),
-                  ),
-                ],
-                selected: <_SignupKind>{_kind},
-                onSelectionChanged: (Set<_SignupKind> next) {
-                  widget.app.clearError();
-                  setState(() => _kind = next.first);
-                },
+              const SizedBox(height: 12),
+              TextField(
+                controller: name,
+                decoration: const InputDecoration(
+                  labelText: 'Your name',
+                  hintText: 'Optional',
+                ),
+                onChanged: (_) => _clearAppErrorIfNeeded(),
               ),
-              const SizedBox(height: 16),
-              if (_kind == _SignupKind.emailPassword) ...[
-                TextField(
-                  controller: name,
-                  decoration: const InputDecoration(
-                    labelText: 'Your name',
-                    hintText: 'Optional',
-                  ),
-                  onChanged: (_) => _clearAppErrorIfNeeded(),
-                ),
-                const SizedBox(height: 12),
-                AutofillGroup(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TextField(
-                        controller: email,
-                        keyboardType: TextInputType.emailAddress,
-                        textInputAction: TextInputAction.next,
-                        autofillHints: const [AutofillHints.email],
-                        decoration: const InputDecoration(labelText: 'Email'),
-                        onChanged: (_) {
-                          _clearAppErrorIfNeeded();
-                          setState(() {});
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: password,
-                        obscureText: !_passwordVisible,
-                        obscuringCharacter: '•',
-                        keyboardType: TextInputType.visiblePassword,
-                        textInputAction: TextInputAction.next,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        smartDashesType: SmartDashesType.disabled,
-                        smartQuotesType: SmartQuotesType.disabled,
-                        enableIMEPersonalizedLearning: false,
-                        autofillHints: const [AutofillHints.newPassword],
-                        decoration: InputDecoration(
-                          labelText: 'Password (min. 6 characters)',
-                          suffixIcon: IconButton(
-                            tooltip: _passwordVisible ? 'Hide password' : 'Show password',
-                            onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
-                            icon: Icon(_passwordVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                          ),
+              const SizedBox(height: 12),
+              AutofillGroup(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: email,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.email],
+                      decoration: const InputDecoration(labelText: 'Email'),
+                      onChanged: (_) {
+                        _clearAppErrorIfNeeded();
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: password,
+                      obscureText: !_passwordVisible,
+                      obscuringCharacter: '•',
+                      keyboardType: TextInputType.visiblePassword,
+                      textInputAction: TextInputAction.next,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      smartDashesType: SmartDashesType.disabled,
+                      smartQuotesType: SmartQuotesType.disabled,
+                      enableIMEPersonalizedLearning: false,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: InputDecoration(
+                        labelText: 'Password (min. 6 characters)',
+                        suffixIcon: IconButton(
+                          tooltip: _passwordVisible ? 'Hide password' : 'Show password',
+                          onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
+                          icon: Icon(_passwordVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
                         ),
-                        onChanged: (_) {
-                          _clearAppErrorIfNeeded();
-                          setState(() {});
-                        },
                       ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: confirm,
-                        obscureText: !_confirmPasswordVisible,
-                        obscuringCharacter: '•',
-                        keyboardType: TextInputType.visiblePassword,
-                        textInputAction: TextInputAction.done,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        smartDashesType: SmartDashesType.disabled,
-                        smartQuotesType: SmartQuotesType.disabled,
-                        enableIMEPersonalizedLearning: false,
-                        autofillHints: const [AutofillHints.newPassword],
-                        decoration: InputDecoration(
-                          labelText: 'Confirm password',
-                          errorText: mismatch ? 'Passwords do not match' : null,
-                          suffixIcon: IconButton(
-                            tooltip: _confirmPasswordVisible ? 'Hide password' : 'Show password',
-                            onPressed: () => setState(() => _confirmPasswordVisible = !_confirmPasswordVisible),
-                            icon: Icon(_confirmPasswordVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
-                          ),
+                      onChanged: (_) {
+                        _clearAppErrorIfNeeded();
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirm,
+                      obscureText: !_confirmPasswordVisible,
+                      obscuringCharacter: '•',
+                      keyboardType: TextInputType.visiblePassword,
+                      textInputAction: TextInputAction.done,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      smartDashesType: SmartDashesType.disabled,
+                      smartQuotesType: SmartQuotesType.disabled,
+                      enableIMEPersonalizedLearning: false,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: InputDecoration(
+                        labelText: 'Confirm password',
+                        errorText: mismatch ? 'Passwords do not match' : null,
+                        suffixIcon: IconButton(
+                          tooltip: _confirmPasswordVisible ? 'Hide password' : 'Show password',
+                          onPressed: () => setState(() => _confirmPasswordVisible = !_confirmPasswordVisible),
+                          icon: Icon(_confirmPasswordVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined),
                         ),
-                        onChanged: (_) {
-                          _clearAppErrorIfNeeded();
-                          setState(() {});
-                        },
                       ),
-                    ],
-                  ),
+                      onChanged: (_) {
+                        _clearAppErrorIfNeeded();
+                        setState(() {});
+                      },
+                    ),
+                  ],
                 ),
-              ] else ...[
-              ],
+              ),
+              const SizedBox(height: 12),
+              const LegalLinksRow(showAgreementLine: true),
               const SizedBox(height: 16),
               if (err != null && err.isNotEmpty)
                 Padding(
@@ -273,16 +255,20 @@ class _SignupScreenState extends State<SignupScreen> {
                     style: TextStyle(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.w600),
                   ),
                 ),
-              if (_kind == _SignupKind.emailPassword)
-                FilledButton(
-                  onPressed: createEnabled ? submit : null,
-                  child: Text(busy ? 'Creating…' : 'Create account'),
-                )
-              else
-                FilledButton.tonal(
-                  onPressed: googleEnabled ? _googleSignup : null,
-                  child: Text(busy ? 'Please wait…' : 'Continue with Google'),
+              FilledButton(
+                onPressed: createEnabled ? submit : null,
+                child: Text(busy ? 'Creating…' : 'Create account'),
+              ),
+              if (googleConfigured) ...[
+                const SizedBox(height: 16),
+                const AuthOrDivider(),
+                const SizedBox(height: 8),
+                GoogleSignInButton(
+                  label: 'Sign up with Google',
+                  loading: busy,
+                  onPressed: _companyOk && !busy ? _googleSignup : null,
                 ),
+              ],
               const SizedBox(height: 12),
               TextButton(
                 onPressed: busy
