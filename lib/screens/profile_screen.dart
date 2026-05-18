@@ -542,6 +542,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
           },
         ),
         ProfileMenuTile(
+          icon: Icons.person_remove_outlined,
+          title: 'Delete account',
+          subtitle: 'Request removal of your HRMS account',
+          onTap: () async {
+            final opened = await openLegalUrl(LegalConfig.accountDeletionUrl);
+            if (!opened && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Open the web app to request account deletion.')),
+              );
+            }
+          },
+        ),
+        ProfileMenuTile(
           icon: Icons.logout,
           title: 'Log out',
           subtitle: 'Sign out of HRMS on this device',

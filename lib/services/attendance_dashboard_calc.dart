@@ -28,7 +28,7 @@ class _BreakWindow {
   int endMs;
 }
 
-List<Map<String, String>> _asSegments(dynamic raw) {
+List<Map<String, String>> parseBreakSegments(dynamic raw) {
   if (raw == null) return [];
   if (raw is List) {
     final out = <Map<String, String>>[];
@@ -43,7 +43,7 @@ List<Map<String, String>> _asSegments(dynamic raw) {
   if (raw is String && raw.trim().isNotEmpty) {
     try {
       final j = jsonDecode(raw);
-      if (j is List) return _asSegments(j);
+      if (j is List) return parseBreakSegments(j);
     } catch (_) {}
   }
   return [];
@@ -74,19 +74,48 @@ List<_BreakWindow> _mergeBreakWindows(List<_BreakWindow> windows) {
   return merged;
 }
 
+int breakMinutesForKind({
+  required int recordedMinutes,
+  required List<Map<String, String>> segments,
+  String? legacyOut,
+  String? legacyIn,
+  String? runningStart,
+  required String nowIso,
+}) {
+  var fromSegments = 0;
+  for (final s in segments) {
+    fromSegments += minutesBetweenIso(s['out'], s['in']);
+  }
+  if (runningStart != null && runningStart.isNotEmpty) {
+    fromSegments += minutesBetweenIso(runningStart, nowIso);
+  }
+  if (segments.isNotEmpty || (runningStart != null && runningStart.isNotEmpty)) {
+    return fromSegments;
+  }
+  final legacySpan = minutesBetweenIso(legacyOut, legacyIn);
+  return [recordedMinutes, legacySpan].reduce((a, b) => a > b ? a : b);
+}
+
 List<_BreakWindow> _breakWindowsFromLog(Map<String, dynamic> log, int nowMs) {
   final windows = <_BreakWindow>[];
   final nowIso = DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true).toIso8601String();
 
-  for (final s in _asSegments(log['lunch_break_segments'])) {
+  final lunchSegs = parseBreakSegments(log['lunch_break_segments']);
+  final teaSegs = parseBreakSegments(log['tea_break_segments']);
+
+  for (final s in lunchSegs) {
     _addBreakWindow(windows, s['out'], s['in']);
   }
-  for (final s in _asSegments(log['tea_break_segments'])) {
+  for (final s in teaSegs) {
     _addBreakWindow(windows, s['out'], s['in']);
   }
 
-  _addBreakWindow(windows, log['lunch_check_out_at']?.toString(), log['lunch_check_in_at']?.toString());
-  _addBreakWindow(windows, log['tea_check_out_at']?.toString(), log['tea_check_in_at']?.toString());
+  if (lunchSegs.isEmpty) {
+    _addBreakWindow(windows, log['lunch_check_out_at']?.toString(), log['lunch_check_in_at']?.toString());
+  }
+  if (teaSegs.isEmpty) {
+    _addBreakWindow(windows, log['tea_check_out_at']?.toString(), log['tea_check_in_at']?.toString());
+  }
 
   final lbs = log['lunch_break_started_at']?.toString();
   if (lbs != null && lbs.isNotEmpty) {
@@ -218,19 +247,26 @@ Map<String, dynamic> mergeWebDashboardMetrics({
   final recordedLunchMin = (num.tryParse(log['lunch_break_minutes']?.toString() ?? '0') ?? 0).round();
   final recordedTeaMin = (num.tryParse(log['tea_break_minutes']?.toString() ?? '0') ?? 0).round();
 
-  final lunchSpanMin = minutesBetweenIso(log['lunch_check_out_at']?.toString(), log['lunch_check_in_at']?.toString());
-  final teaSpanMin = minutesBetweenIso(log['tea_check_out_at']?.toString(), log['tea_check_in_at']?.toString());
-
   final nowIso = DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true).toIso8601String();
-  final runningLunchMin = log['lunch_break_started_at'] != null
-      ? minutesBetweenIso(log['lunch_break_started_at'].toString(), nowIso)
-      : 0;
-  final runningTeaMin = log['tea_break_started_at'] != null
-      ? minutesBetweenIso(log['tea_break_started_at'].toString(), nowIso)
-      : 0;
+  final lunchSegs = parseBreakSegments(log['lunch_break_segments']);
+  final teaSegs = parseBreakSegments(log['tea_break_segments']);
 
-  final lunchIdleMinBase = [recordedLunchMin, lunchSpanMin, runningLunchMin].reduce((a, b) => a > b ? a : b);
-  final teaIdleMinBase = [recordedTeaMin, teaSpanMin, runningTeaMin].reduce((a, b) => a > b ? a : b);
+  final lunchIdleMinBase = breakMinutesForKind(
+    recordedMinutes: recordedLunchMin,
+    segments: lunchSegs,
+    legacyOut: log['lunch_check_out_at']?.toString(),
+    legacyIn: log['lunch_check_in_at']?.toString(),
+    runningStart: log['lunch_break_started_at']?.toString(),
+    nowIso: nowIso,
+  );
+  final teaIdleMinBase = breakMinutesForKind(
+    recordedMinutes: recordedTeaMin,
+    segments: teaSegs,
+    legacyOut: log['tea_check_out_at']?.toString(),
+    legacyIn: log['tea_check_in_at']?.toString(),
+    runningStart: log['tea_break_started_at']?.toString(),
+    nowIso: nowIso,
+  );
 
   final shouldApplyCombinedBreakPolicy = log['check_out_at'] != null;
   final grossForPolicy = grossMin ?? 0;

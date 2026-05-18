@@ -21,14 +21,17 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
   List<Map<String, dynamic>> _departments = [];
   List<Map<String, dynamic>> _designations = [];
   List<Map<String, dynamic>> _roles = [];
+  List<Map<String, dynamic>> _deletionRequests = [];
 
   bool _loading = true;
+  bool _deletionBusy = false;
   Object? _err;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    final tabCount = widget.app.user?.role == 'super_admin' ? 6 : 5;
+    _tabs = TabController(length: tabCount, vsync: this);
     _load();
   }
 
@@ -58,21 +61,28 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     });
     try {
       final company = await _rpc.companyGetForUser(u.id);
-      final results = await Future.wait([
+      final futures = <Future<dynamic>>[
         _rpc.settingsShiftsAll(cid),
         _rpc.settingsDivisionsAll(cid),
         _rpc.settingsDepartmentsAll(cid),
         _rpc.settingsDesignationsAll(cid),
         _rpc.settingsRolesAll(cid),
-      ]);
+      ];
+      if (_isSuper) {
+        futures.add(_rpc.accountDeletionRequestsList(u.id));
+      }
+      final results = await Future.wait(futures);
       if (!mounted) return;
       setState(() {
         _company = company;
-        _shifts = results[0];
-        _divisions = results[1];
-        _departments = results[2];
-        _designations = results[3];
-        _roles = results[4];
+        _shifts = results[0] as List<Map<String, dynamic>>;
+        _divisions = results[1] as List<Map<String, dynamic>>;
+        _departments = results[2] as List<Map<String, dynamic>>;
+        _designations = results[3] as List<Map<String, dynamic>>;
+        _roles = results[4] as List<Map<String, dynamic>>;
+        if (_isSuper && results.length > 5) {
+          _deletionRequests = results[5] as List<Map<String, dynamic>>;
+        }
         _loading = false;
       });
     } catch (e) {
@@ -399,6 +409,109 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
     );
   }
 
+  String _fmtDate(String iso) {
+    final d = DateTime.tryParse(iso);
+    if (d == null) return iso;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
+
+  Future<void> _updateDeletionRequest(String id, String status) async {
+    final u = widget.app.user;
+    if (u == null || !_isSuper || _deletionBusy) return;
+    final verb = status == 'completed' ? 'permanently delete this user' : 'cancel this deletion request';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(status == 'completed' ? 'Delete now?' : 'Cancel request?'),
+        content: Text('Are you sure you want to $verb?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _deletionBusy = true);
+    try {
+      await _rpc.accountDeletionRequestSetStatus(
+        actorUserId: u.id,
+        requestId: id,
+        status: status,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(status == 'completed' ? 'User deleted' : 'Request cancelled')),
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _deletionBusy = false);
+    }
+  }
+
+  Widget _deletionTab() {
+    if (_deletionRequests.isEmpty) {
+      return const Center(child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text('No account deletion requests.', textAlign: TextAlign.center),
+      ));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: _deletionRequests.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (_, i) {
+        final r = _deletionRequests[i];
+        final status = _s(r['status']);
+        final pending = status == 'pending';
+        final name = _s(r['user_name']).isNotEmpty ? _s(r['user_name']) : _s(r['email']);
+        final sub = [
+          _s(r['email']),
+          if (_s(r['employee_code']).isNotEmpty) _s(r['employee_code']),
+          'Requested ${_fmtDate(_s(r['requested_at']))}',
+          'Scheduled ${_fmtDate(_s(r['scheduled_deletion_at']))}',
+        ].where((e) => e.isNotEmpty).join(' · ');
+        return Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(sub, style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 4),
+                Text('Status: $status', style: Theme.of(context).textTheme.labelSmall),
+                if (pending) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: _deletionBusy ? null : () => _updateDeletionRequest(_s(r['id']), 'cancelled'),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+                        onPressed: _deletionBusy ? null : () => _updateDeletionRequest(_s(r['id']), 'completed'),
+                        child: const Text('Delete now'),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -407,12 +520,13 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
         bottom: TabBar(
           controller: _tabs,
           isScrollable: true,
-          tabs: const [
-            Tab(text: 'Company'),
-            Tab(text: 'Shifts'),
-            Tab(text: 'Roles'),
-            Tab(text: 'Org'),
-            Tab(text: 'Designations'),
+          tabs: [
+            const Tab(text: 'Company'),
+            const Tab(text: 'Shifts'),
+            const Tab(text: 'Roles'),
+            const Tab(text: 'Org'),
+            const Tab(text: 'Designations'),
+            if (_isSuper) const Tab(text: 'Deletion'),
           ],
         ),
       ),
@@ -440,6 +554,7 @@ class _SettingsScreenState extends State<SettingsScreen> with SingleTickerProvid
                     _rolesTab(),
                     _orgTab(),
                     _designationsTab(),
+                    if (_isSuper) _deletionTab(),
                   ],
                 ),
     );

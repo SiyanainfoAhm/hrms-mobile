@@ -1230,5 +1230,30 @@ class RpcService {
     });
     return Map<String, dynamic>.from(res as Map);
   }
+
+  Future<List<Map<String, dynamic>>> accountDeletionRequestsList(String actorUserId) async {
+    final res = await _sb.rpc('hrms_account_deletion_requests_list', params: {
+      'p_actor_id': actorUserId,
+    });
+    if (res == null) return [];
+    if (res is List) {
+      return res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    if (res is Map) return [Map<String, dynamic>.from(res)];
+    return [];
+  }
+
+  Future<Map<String, dynamic>> accountDeletionRequestSetStatus({
+    required String actorUserId,
+    required String requestId,
+    required String status,
+  }) async {
+    final res = await _sb.rpc('hrms_account_deletion_request_set_status', params: {
+      'p_actor_id': actorUserId,
+      'p_request_id': requestId,
+      'p_status': status,
+    });
+    return Map<String, dynamic>.from(res as Map);
+  }
 }
 

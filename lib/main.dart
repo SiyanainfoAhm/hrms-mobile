@@ -160,6 +160,7 @@ class _HrmsAppState extends State<HrmsApp> {
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'HRMS',
+      debugShowCheckedModeBanner: false,
       theme: HrmsTheme.light(),
       routerConfig: _router,
     );

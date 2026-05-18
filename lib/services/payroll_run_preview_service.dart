@@ -9,6 +9,7 @@ import 'government_payroll_calc.dart';
 import 'leave_balance_payroll.dart';
 import 'leave_policy_payroll.dart';
 import 'private_payroll_calc.dart';
+import 'attendance_dashboard_calc.dart';
 
 const _minActiveHoursPresent = 8.0;
 const _minActiveHoursHalfDay = 0.01;
@@ -42,10 +43,18 @@ int _countCalendarDaysInclusive(String startYmd, String endYmd) {
 }
 
 int _effectiveLunchBreakMinutes({
-  required int recordedLunchMinutes,
+  required Map<String, dynamic> row,
   required int grossWorkMinutes,
 }) {
-  final m = recordedLunchMinutes.clamp(0, 24 * 60);
+  final nowIso = DateTime.now().toUtc().toIso8601String();
+  final m = breakMinutesForKind(
+    recordedMinutes: (row['lunch_break_minutes'] as num?)?.round() ?? 0,
+    segments: parseBreakSegments(row['lunch_break_segments']),
+    legacyOut: row['lunch_check_out_at']?.toString(),
+    legacyIn: row['lunch_check_in_at']?.toString(),
+    runningStart: row['lunch_break_started_at']?.toString(),
+    nowIso: nowIso,
+  );
   return math.min(m, math.max(0, grossWorkMinutes));
 }
 
@@ -326,7 +335,7 @@ Future<
   final att = await sb
       .from('HRMS_attendance_logs')
       .select(
-        'employee_id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_check_out_at, lunch_check_in_at',
+        'employee_id, work_date, check_in_at, check_out_at, total_hours, lunch_break_minutes, tea_break_minutes, lunch_check_out_at, lunch_check_in_at, lunch_break_segments, lunch_break_started_at',
       )
       .eq('company_id', companyId)
       .inFilter('employee_id', employeeIds)
@@ -364,7 +373,7 @@ Future<
     if (durationMinutes == null) continue;
 
     final lunchMin = _effectiveLunchBreakMinutes(
-      recordedLunchMinutes: (row['lunch_break_minutes'] as num?)?.round() ?? 0,
+      row: row,
       grossWorkMinutes: durationMinutes,
     );
     final breakMin = lunchMin + teaMin;

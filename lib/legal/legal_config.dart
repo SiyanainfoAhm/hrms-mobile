@@ -33,4 +33,11 @@ class LegalConfig {
     if (base.isEmpty) return '';
     return '$base/terms';
   }
+
+  /// Public account deletion request page (Google Play / in-app).
+  static String get accountDeletionUrl {
+    final base = RuntimeConfig.instance.webAppInviteBaseUrl.trim();
+    if (base.isEmpty) return '';
+    return '$base/account-deletion';
+  }
 }
